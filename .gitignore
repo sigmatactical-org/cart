@@ -1,0 +1,5 @@
+/target
+/build
+/.cargo/config.toml
+/askama.toml
+/data

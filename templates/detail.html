@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}Cart {{ cart.id }} — Sigma Cart{% endblock %}
+
+{% block brand %}Sigma Cart{% endblock %}
+
+{% block main_class %}cart-main{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+      <h1 class="mb-1">Cart</h1>
+      <p class="text-secondary mb-0">
+        User: {{ user_display }} · Status: {{ status_label }} · Updated {{ cart.updated_at }}
+      </p>
+    </div>
+    <a class="btn btn-outline-secondary" href="/">Back to list</a>
+  </div>
+
+  {% if let Some(err) = error %}
+  <div class="alert alert-danger" role="alert">{{ err }}</div>
+  {% endif %}
+
+  <section class="mb-5">
+    <h2 class="h4">Details</h2>
+    <form method="post" action="/carts/{{ cart.id }}/edit" class="col-lg-8">
+      <div class="mb-3">
+        <label for="user_id" class="form-label">User</label>
+        {% if identity_users.is_empty() %}
+        <input type="text" class="form-control" id="user_id" name="user_id" value="{{ user_id }}">
+        {% else %}
+        <select class="form-select" id="user_id" name="user_id">
+          <option value="" {% if user_id.is_empty() %}selected{% endif %}>Unassigned</option>
+          {% for user in identity_users %}
+          <option value="{{ user.id }}" {% if user_id == user.id %}selected{% endif %}>{{ user.display_name }}{% if let Some(email) = user.email.as_ref() %} ({{ email }}){% endif %}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+      </div>
+      <div class="mb-3">
+        <label for="status" class="form-label">Status</label>
+        <select class="form-select" id="status" name="status">
+          <option value="open" {% if status == "open" %}selected{% endif %}>Open</option>
+          <option value="submitted" {% if status == "submitted" %}selected{% endif %}>Submitted</option>
+          <option value="cancelled" {% if status == "cancelled" %}selected{% endif %}>Cancelled</option>
+        </select>
+      </div>
+      <div class="mb-3">
+        <label for="note" class="form-label">Note</label>
+        <textarea class="form-control" id="note" name="note" rows="2">{{ note }}</textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Save changes</button>
+    </form>
+  </section>
+
+  <section class="mb-4">
+    <h2 class="h4">Line items</h2>
+    {% if line_rows.is_empty() %}
+    <p class="text-secondary">No line items yet.</p>
+    {% else %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr>
+            <th>SKU</th>
+            <th>Name</th>
+            <th>Qty</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in line_rows %}
+          <tr>
+            <td><code>{{ row.sku_code }}</code>{% if row.missing_catalog %} <span class="text-warning" title="Missing from catalog">⚠</span>{% endif %}</td>
+            <td>{{ row.name }}</td>
+            <td>{{ row.quantity }}</td>
+            <td>
+              {% if cart_open %}
+              <form method="post" action="/carts/{{ cart.id }}/lines/{{ row.line_id }}/delete" class="d-inline" onsubmit="return confirm('Remove this line?');">
+                <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </section>
+
+  {% if cart_open %}
+  <section class="mb-4">
+    <h2 class="h5">Add line item</h2>
+    <form method="post" action="/carts/{{ cart.id }}/lines" class="col-lg-8">
+      <div class="mb-3">
+        <label for="sku_id" class="form-label">Catalog SKU</label>
+        {% if catalog_skus.is_empty() %}
+        <input type="text" class="form-control" id="sku_id" name="sku_id" value="{{ line_sku_id }}" required placeholder="Catalog SKU id">
+        {% else %}
+        <select class="form-select" id="sku_id" name="sku_id" required>
+          <option value="" disabled {% if line_sku_id.is_empty() %}selected{% endif %}>Select a SKU…</option>
+          {% for sku in catalog_skus %}
+          <option value="{{ sku.id }}" {% if line_sku_id == sku.id %}selected{% endif %}>{{ sku.sku_code }} — {{ sku.name }}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+      </div>
+      <div class="mb-3">
+        <label for="quantity" class="form-label">Quantity</label>
+        <input type="number" class="form-control" id="quantity" name="quantity" value="{{ line_quantity }}" min="1" step="1" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Add line</button>
+    </form>
+  </section>
+  {% endif %}
+
+  <section class="mt-4">
+    <form method="post" action="/carts/{{ cart.id }}/delete" onsubmit="return confirm('Delete this cart?');">
+      <button type="submit" class="btn btn-outline-danger">Delete cart</button>
+    </form>
+  </section>
+</div>
+{% endblock %}

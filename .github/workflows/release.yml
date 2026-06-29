@@ -1,0 +1,164 @@
+# Release: build in GitHub Actions → stage build/image/ → docker build (COPY-only) → push → Cloud Run.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      GCP_PROJECT_ID:
+        description: Override (optional)
+        required: false
+        type: string
+      GCP_REGION:
+        description: Override (optional)
+        required: false
+        type: string
+      CLOUD_RUN_SERVICE:
+        description: Override (optional)
+        required: false
+        type: string
+      GCP_ARTIFACT_REPOSITORY:
+        description: Override (optional)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  RUST_TOOLCHAIN: "1.90.0"
+  NODE_VERSION: "22"
+  CARGO_TERM_COLOR: always
+  CONTAINER_PORT: "8080"
+  IMAGE_NAME: sigma-cart
+
+jobs:
+  publish-and-deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ vars.GCP_ACTIONS_ENVIRONMENT || 'gcp' }}
+    steps:
+      - name: Resolve GCP deploy configuration
+        run: |
+          set -e
+          pick() {
+            _in="$1" _v="$2" _s="$3"
+            if [ -n "$_in" ]; then printf '%s' "$_in"
+            elif [ -n "$_v" ]; then printf '%s' "$_v"
+            else printf '%s' "$_s"; fi
+          }
+          clean() {
+            printf '%s' "$1" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+          }
+          GP="$(clean "$(pick "$IN_GCP_PROJECT_ID" "$VAR_PROJECT_ID" "$SECRET_PROJECT_ID")")"
+          GR="$(clean "$(pick "$IN_GCP_REGION" "$VAR_REGION" "$SECRET_REGION")")"
+          GS="$(clean "$(pick "$IN_CLOUD_RUN_SERVICE" "$VAR_SERVICE" "$SECRET_SERVICE")")"
+          GA="$(clean "$(pick "$IN_GCP_ARTIFACT_REPOSITORY" "$VAR_ARTIFACT" "$SECRET_ARTIFACT")")"
+          {
+            echo "GCP_PROJECT_ID<<__EOF"
+            echo "$GP"
+            echo "__EOF"
+            echo "GCP_REGION<<__EOF"
+            echo "$GR"
+            echo "__EOF"
+            echo "CLOUD_RUN_SERVICE<<__EOF"
+            echo "$GS"
+            echo "__EOF"
+            echo "GCP_ARTIFACT_REPOSITORY<<__EOF"
+            echo "$GA"
+            echo "__EOF"
+          } >> "$GITHUB_ENV"
+        env:
+          IN_GCP_PROJECT_ID: ${{ github.event.inputs.GCP_PROJECT_ID }}
+          IN_GCP_REGION: ${{ github.event.inputs.GCP_REGION }}
+          IN_CLOUD_RUN_SERVICE: ${{ github.event.inputs.CLOUD_RUN_SERVICE }}
+          IN_GCP_ARTIFACT_REPOSITORY: ${{ github.event.inputs.GCP_ARTIFACT_REPOSITORY }}
+          VAR_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          SECRET_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          VAR_REGION: ${{ vars.GCP_REGION }}
+          SECRET_REGION: ${{ secrets.GCP_REGION }}
+          VAR_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+          SECRET_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+          VAR_ARTIFACT: ${{ vars.GCP_ARTIFACT_REPOSITORY }}
+          SECRET_ARTIFACT: ${{ secrets.GCP_ARTIFACT_REPOSITORY }}
+
+      - name: Check GCP deploy configuration
+        run: |
+          missing=0
+          hint="Set Actions Variables or Secrets (same names), or on GitHub Environment '${{ vars.GCP_ACTIONS_ENVIRONMENT || 'gcp' }}'. Optional: Run workflow with inputs."
+          [ -n "$GCP_PROJECT_ID" ] || { echo "::error::Missing GCP_PROJECT_ID — $hint"; missing=1; }
+          [ -n "$GCP_REGION" ] || { echo "::error::Missing GCP_REGION — $hint"; missing=1; }
+          [ -n "$CLOUD_RUN_SERVICE" ] || { echo "::error::Missing CLOUD_RUN_SERVICE — $hint"; missing=1; }
+          [ -n "$GCP_ARTIFACT_REPOSITORY" ] || { echo "::error::Missing GCP_ARTIFACT_REPOSITORY — $hint"; missing=1; }
+          exit "$missing"
+
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: sigmatactical-org/sigma-theme
+          path: theme
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: theme/ts/package-lock.json
+
+      - name: Prepare build
+        run: ./scripts/prepare-local.sh
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cargo build (release)
+        run: cargo build --release
+
+      - name: Stage image artifacts
+        run: ./scripts/prepare-image-context.sh
+
+      - name: Image names
+        id: image
+        run: |
+          echo "ghcr=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          echo "gar=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_ARTIFACT_REPOSITORY }}/${{ env.IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+          echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ env.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        run: |
+          docker build -f Dockerfile \
+            -t "${{ steps.image.outputs.gar }}:${{ steps.image.outputs.tag }}" \
+            -t "${{ steps.image.outputs.ghcr }}:${{ steps.image.outputs.tag }}" \
+            build/image
+          docker push "${{ steps.image.outputs.gar }}:${{ steps.image.outputs.tag }}"
+          docker push "${{ steps.image.outputs.ghcr }}:${{ steps.image.outputs.tag }}"
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          service: ${{ env.CLOUD_RUN_SERVICE }}
+          region: ${{ env.GCP_REGION }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          image: ${{ steps.image.outputs.gar }}:${{ steps.image.outputs.tag }}
+          flags: --allow-unauthenticated --port=${{ env.CONTAINER_PORT }}

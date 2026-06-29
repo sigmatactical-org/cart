@@ -1,0 +1,30 @@
+[package]
+name = "sigma-cart"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90.0"
+license = "MIT OR Apache-2.0"
+authors = ["Sigma Tactical Group contributors <https://github.com/sigmatactical-org>"]
+description = "Shopping cart service for Sigma Tactical Group — carts backed by catalog SKUs and identity users"
+publish = false
+
+[dependencies]
+askama = "0.16.0"
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "serde"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sigma-theme = { git = "https://github.com/sigmatactical-org/sigma-theme.git", default-features = false, features = ["askama", "warp"] }
+thiserror = "2.0.17"
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "sync"] }
+uuid = { version = "1.18.1", features = ["v4", "serde"] }
+warp = { version = "0.4.3", features = ["server", "test"] }
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block title %}Sigma Cart{% endblock %}
+
+{% block brand %}Sigma Cart{% endblock %}
+
+{% block main_class %}cart-main{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+      <h1 class="mb-1">Cart</h1>
+      <p class="text-secondary mb-0">Shopping carts linked to identity users and catalog SKUs.</p>
+    </div>
+    <a class="btn btn-primary" href="/carts/new">New cart</a>
+  </div>
+
+  {% if let Some(msg) = message %}
+  <div class="alert alert-info" role="status">{{ msg }}</div>
+  {% endif %}
+
+  {% if !catalog_configured %}
+  <div class="alert alert-warning" role="note">
+    Catalog integration is not configured. Set <code>CART_CATALOG_BASE_URL</code> to pull items from
+    <a href="https://github.com/sigmatactical-org/catalog">sigma-catalog</a>.
+  </div>
+  {% endif %}
+
+  {% if !identity_configured %}
+  <div class="alert alert-warning" role="note">
+    Identity integration is not configured. Set <code>CART_IDENTITY_ISSUER_URL</code>,
+    <code>CART_IDENTITY_CLIENT_ID</code>, and <code>CART_IDENTITY_CLIENT_SECRET</code> to assign carts to users from
+    <a href="https://github.com/sigmatactical-org/identity">sigma-identity</a>.
+  </div>
+  {% endif %}
+
+  {% if let Some(err) = catalog_error %}
+  <div class="alert alert-danger" role="alert">Could not load catalog: {{ err }}</div>
+  {% endif %}
+
+  {% if let Some(err) = identity_error %}
+  <div class="alert alert-danger" role="alert">Could not load identity users: {{ err }}</div>
+  {% endif %}
+
+  <section class="mb-4">
+    <h2 class="h4">Carts</h2>
+    {% if rows.is_empty() %}
+    <p class="text-secondary">No carts yet.</p>
+    {% else %}
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Status</th>
+            <th>Lines</th>
+            <th>Updated</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td>
+              {{ row.user_display }}
+              {% if row.missing_user %}<span class="text-warning" title="Missing from identity">⚠</span>{% endif %}
+            </td>
+            <td>{{ row.status_label }}</td>
+            <td>{{ row.line_count }}</td>
+            <td class="text-secondary"><small>{{ row.cart.updated_at }}</small></td>
+            <td class="text-nowrap">
+              <a class="btn btn-sm btn-outline-primary" href="/carts/{{ row.cart.id }}">View</a>
+              <form method="post" action="/carts/{{ row.cart.id }}/delete" class="d-inline" onsubmit="return confirm('Delete this cart?');">
+                <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="mt-5">
+    <h2 class="h5">JSON API</h2>
+    <ul class="small text-secondary">
+      <li><code>GET /users</code> — list identity users</li>
+      <li><code>GET /carts</code> — list carts (enriched with catalog and identity)</li>
+      <li><code>GET /carts/{id}</code> — get one cart</li>
+      <li><code>POST /carts</code> — create cart (JSON body)</li>
+      <li><code>PUT /carts/{id}</code> — update cart</li>
+      <li><code>DELETE /carts/{id}</code> — delete cart</li>
+      <li><code>POST /carts/{id}/lines</code> — add line item</li>
+      <li><code>PUT /carts/{id}/lines/{line_id}</code> — update line quantity</li>
+      <li><code>DELETE /carts/{id}/lines/{line_id}</code> — remove line</li>
+    </ul>
+  </section>
+</div>
+{% endblock %}

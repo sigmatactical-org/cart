@@ -24,7 +24,9 @@ if [[ -n "$THEME_HELPER" ]]; then
   build_theme_ts "$ROOT"
 else
   THEME_PATH="theme"
-  if [[ -d ../theme/ts ]]; then
+  if [[ -d ../../theme/ts ]]; then
+    THEME_PATH="../../theme"
+  elif [[ -d ../theme/ts ]]; then
     THEME_PATH="../theme"
   elif [[ ! -d theme/ts ]]; then
     git clone --depth 1 https://github.com/sigmatactical-org/sigma-theme.git theme
@@ -38,6 +40,13 @@ EOF
 [general]
 dirs = ["templates", "$THEME_PATH/assets/templates"]
 EOF
+  if [[ -f ../Cargo.toml ]] && grep -q 'members' ../Cargo.toml 2>/dev/null; then
+    mkdir -p ../.cargo
+    cat >../.cargo/config.toml <<EOF
+[patch."https://github.com/sigmatactical-org/sigma-theme.git"]
+sigma-theme = { path = "../theme" }
+EOF
+  fi
   (cd "$THEME_PATH/ts" && npm ci && npm run check && npm run build)
 fi
 

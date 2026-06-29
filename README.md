@@ -79,9 +79,20 @@ Browser clients call `/api/carts` on the identity host (with session + CSRF); id
 
 ## Development
 
+Standalone clone:
+
 ```bash
 ./scripts/prepare-local.sh
 cargo run -p sigma-cart
+```
+
+Under the sigma workspace (`sigma/commerce/cart`):
+
+```bash
+cd sigma/commerce/cart && ./scripts/prepare-local.sh && cargo run -p sigma-cart
+# or prepare all commerce services:
+(cd sigma/commerce && ./scripts/prepare-local.sh)
+(cd sigma/commerce && cargo run -p sigma-cart)
 ```
 
 Open http://localhost:8080

@@ -2,32 +2,43 @@
 # Link theme and patch the git dependency for local/CI builds.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORKSPACE="$(cd "$ROOT/.." && pwd)"
 cd "$ROOT"
 
-THEME_PATH=""
-for candidate in "$WORKSPACE/theme" "$WORKSPACE/../sigma/theme"; do
-  if [[ -d "$candidate/ts" ]]; then
-    THEME_PATH="$(cd "$candidate" && pwd)"
+dir="$ROOT"
+THEME_HELPER=""
+while [[ "$dir" != "/" ]]; do
+  if [[ -f "$dir/scripts/resolve-theme.sh" ]]; then
+    THEME_HELPER="$dir/scripts/resolve-theme.sh"
     break
   fi
+  dir="$(dirname "$dir")"
 done
-if [[ -z "$THEME_PATH" ]]; then
-  THEME_PATH="$WORKSPACE/theme"
-  git clone --depth 1 https://github.com/sigmatactical-org/sigma-theme.git "$THEME_PATH"
-fi
 
-mkdir -p .cargo
-cat > .cargo/config.toml <<EOF
+if [[ -n "$THEME_HELPER" ]]; then
+  # shellcheck source=/dev/null
+  source "$THEME_HELPER"
+  prepare_sigma_theme "$ROOT"
+  write_theme_patch_files "$ROOT"
+  write_commerce_workspace_patch "$ROOT"
+  write_askama_config "$ROOT"
+  build_theme_ts "$ROOT"
+else
+  THEME_PATH="theme"
+  if [[ -d ../theme/ts ]]; then
+    THEME_PATH="../theme"
+  elif [[ ! -d theme/ts ]]; then
+    git clone --depth 1 https://github.com/sigmatactical-org/sigma-theme.git theme
+  fi
+  mkdir -p .cargo
+  cat >.cargo/config.toml <<EOF
 [patch."https://github.com/sigmatactical-org/sigma-theme.git"]
 sigma-theme = { path = "$THEME_PATH" }
 EOF
-
-cat > askama.toml <<EOF
+  cat >askama.toml <<EOF
 [general]
 dirs = ["templates", "$THEME_PATH/assets/templates"]
 EOF
+  (cd "$THEME_PATH/ts" && npm ci && npm run check && npm run build)
+fi
 
-(cd "$THEME_PATH/ts" && npm ci && npm run check && npm run build)
-
-echo "sigma-theme ($THEME_PATH) ready for cargo build."
+echo "sigma-theme ($ROOT/${THEME_PATH:-theme}) ready for cargo build."

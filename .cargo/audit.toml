@@ -1,0 +1,4 @@
+# RUSTSEC-2023-0071: Marvin timing side-channel in the `rsa` crate (no patched release on crates.io).
+# Transitive via sqlx-postgres; Postgres is trusted infrastructure for JSON snapshot storage only.
+[advisories]
+ignore = ["RUSTSEC-2023-0071"]

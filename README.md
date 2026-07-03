@@ -2,6 +2,8 @@
 
 Shopping cart service for Sigma Tactical Group. Stores carts locally, pulls catalog SKUs and identity users from upstream services, with a server-rendered web UI and JSON API.
 
+**Internal / admin tool** — not customer-facing. The public storefront is [sigma-store](https://github.com/sigmatactical-org/store); this service is reached only through the [sigma-identity](https://github.com/sigmatactical-org/identity) authenticated proxy.
+
 Repository: https://github.com/sigmatactical-org/cart
 
 Shared site chrome comes from [sigma-theme](https://github.com/sigmatactical-org/sigma-theme).

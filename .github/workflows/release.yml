@@ -95,8 +95,8 @@ jobs:
           [ -n "$GCP_ARTIFACT_REPOSITORY" ] || { echo "::error::Missing GCP_ARTIFACT_REPOSITORY — $hint"; missing=1; }
           exit "$missing"
 
-      - uses: actions/checkout@v5
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: sigmatactical-org/sigma-theme
           path: theme

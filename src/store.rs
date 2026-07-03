@@ -101,7 +101,11 @@ impl CartStore {
         self.persist().await
     }
 
-    pub async fn add_line(&mut self, cart_id: &str, input: CreateLine) -> Result<CartLine, StoreError> {
+    pub async fn add_line(
+        &mut self,
+        cart_id: &str,
+        input: CreateLine,
+    ) -> Result<CartLine, StoreError> {
         self.validate_line_input(&input)?;
         let cart = self
             .db

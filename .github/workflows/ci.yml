@@ -20,6 +20,22 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-bookworm
+        env:
+          POSTGRES_USER: sigma
+          POSTGRES_PASSWORD: sigma
+          POSTGRES_DB: sigma
+        options: >-
+          --health-cmd "pg_isready -U sigma -d sigma"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      DATABASE_URL: postgres://sigma:sigma@127.0.0.1:5432/sigma
     steps:
       - uses: actions/checkout@v5
       - uses: actions/checkout@v5

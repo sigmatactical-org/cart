@@ -1,8 +1,7 @@
 /// PostgreSQL connection URL (shared Sigma database).
 #[must_use]
 pub fn database_url() -> String {
-    std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| sigma_pg::DEFAULT_DATABASE_URL.to_string())
+    std::env::var("DATABASE_URL").unwrap_or_else(|_| sigma_pg::DEFAULT_DATABASE_URL.to_string())
 }
 
 /// Base URL of the catalog service (e.g. `http://127.0.0.1:8081/`).

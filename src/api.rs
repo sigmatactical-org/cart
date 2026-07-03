@@ -44,8 +44,9 @@ fn store_error_status(err: &StoreError) -> StatusCode {
         StoreError::SkuIdRequired
         | StoreError::InvalidQuantity
         | StoreError::CartNotOpen
-        | StoreError::UserNotFound(_) => StatusCode::BAD_REQUEST,
-        StoreError::Io(_) | StoreError::Json(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        | StoreError::UserNotFound(_)
+        | StoreError::InvalidInput(_) => StatusCode::BAD_REQUEST,
+        StoreError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -172,7 +173,7 @@ fn create_cart(
                 return Ok(resp);
             }
             let mut store = store.lock().await;
-            let response = match store.create(input) {
+            let response = match store.create(input).await {
                 Ok(cart) => {
                     let detail = enrich_cart(cart).await;
                     warp::reply::with_status(warp::reply::json(&detail), StatusCode::CREATED)
@@ -198,7 +199,7 @@ fn update_cart(
                     return Ok(resp);
                 }
                 let mut store = store.lock().await;
-                let response = match store.update(&id, input) {
+                let response = match store.update(&id, input).await {
                     Ok(cart) => warp::reply::json(&enrich_cart(cart).await).into_response(),
                     Err(StoreError::CartNotFound) => return Err(warp::reject::not_found()),
                     Err(e) => json_error(store_error_status(&e), e.to_string()),
@@ -217,7 +218,7 @@ fn delete_cart(
         .and(store)
         .and_then(|id: String, store: SharedStore| async move {
             let mut store = store.lock().await;
-            let response = match store.delete(&id) {
+            let response = match store.delete(&id).await {
                 Ok(()) => {
                     warp::reply::with_status(warp::reply(), StatusCode::NO_CONTENT).into_response()
                 }
@@ -247,7 +248,7 @@ fn add_line(
                     ));
                 }
                 let mut store = store.lock().await;
-                let response = match store.add_line(&cart_id, input) {
+                let response = match store.add_line(&cart_id, input).await {
                     Ok(line) => {
                         warp::reply::with_status(warp::reply::json(&line), StatusCode::CREATED)
                             .into_response()
@@ -271,7 +272,7 @@ fn update_line(
         .and_then(
             |cart_id: String, line_id: String, input: UpdateLine, store: SharedStore| async move {
                 let mut store = store.lock().await;
-                let response = match store.update_line(&cart_id, &line_id, input) {
+                let response = match store.update_line(&cart_id, &line_id, input).await {
                     Ok(line) => warp::reply::json(&line).into_response(),
                     Err(StoreError::CartNotFound | StoreError::LineNotFound) => {
                         return Err(warp::reject::not_found());
@@ -293,7 +294,7 @@ fn delete_line(
         .and_then(
             |cart_id: String, line_id: String, store: SharedStore| async move {
                 let mut store = store.lock().await;
-                let response = match store.delete_line(&cart_id, &line_id) {
+                let response = match store.delete_line(&cart_id, &line_id).await {
                     Ok(()) => warp::reply::with_status(warp::reply(), StatusCode::NO_CONTENT)
                         .into_response(),
                     Err(StoreError::CartNotFound | StoreError::LineNotFound) => {

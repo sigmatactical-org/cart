@@ -106,7 +106,7 @@ fn create_cart_form(
                             invalid_input("identity user not found".to_string()),
                         )
                     } else {
-                        match store.create(input) {
+                        match store.create(input).await {
                             Ok(cart) => warp::redirect::redirect(
                                 warp::http::Uri::from_maybe_shared(format!("/carts/{}", cart.id))
                                     .unwrap(),
@@ -178,7 +178,7 @@ fn update_cart_form(
                                 invalid_input("identity user not found".to_string()),
                             )
                         } else {
-                            match store.update(&id, input) {
+                            match store.update(&id, input).await {
                                 Ok(cart) => warp::redirect::redirect(
                                     warp::http::Uri::from_maybe_shared(format!(
                                         "/carts/{}",
@@ -246,7 +246,7 @@ fn add_line_form(
                                 )),
                             )
                         } else {
-                            match store.add_line(&cart_id, input) {
+                            match store.add_line(&cart_id, input).await {
                                 Ok(_) => warp::redirect::redirect(
                                     warp::http::Uri::from_maybe_shared(format!("/carts/{cart_id}"))
                                         .unwrap(),
@@ -295,7 +295,7 @@ fn delete_line_form(
                 let mut store = store.lock().await;
                 let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
                 let identity_users = identity::fetch_users().await.unwrap_or_default();
-                match store.delete_line(&cart_id, &line_id) {
+                match store.delete_line(&cart_id, &line_id).await {
                     Ok(()) => Ok(warp::redirect::redirect(
                         warp::http::Uri::from_maybe_shared(format!("/carts/{cart_id}")).unwrap(),
                     )
@@ -328,7 +328,7 @@ fn delete_cart_form(
             let mut store = store.lock().await;
             let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
             let identity_users = identity::fetch_users().await.unwrap_or_default();
-            match store.delete(&id) {
+            match store.delete(&id).await {
                 Ok(()) => {
                     Ok(warp::redirect::redirect(warp::http::Uri::from_static("/")).into_response())
                 }
@@ -367,10 +367,7 @@ fn line_form_to_values(form: &LineForm) -> LineFormValues {
 }
 
 fn invalid_input(message: String) -> StoreError {
-    StoreError::Io(std::io::Error::new(
-        std::io::ErrorKind::InvalidInput,
-        message,
-    ))
+    StoreError::InvalidInput(message)
 }
 
 fn render_cart_form_error(

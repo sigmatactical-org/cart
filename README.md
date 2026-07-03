@@ -20,7 +20,7 @@ Shared site chrome comes from [sigma-theme](https://github.com/sigmatactical-org
 | Variable | Purpose |
 |----------|---------|
 | `PORT` | Listen port (default `8080`) |
-| `CART_DATA_PATH` | JSON database path (default `data/carts.json`) |
+| `DATABASE_URL` | PostgreSQL connection URL (default `postgres://sigma:sigma@127.0.0.1:5432/sigma`) |
 | `CART_CATALOG_BASE_URL` | Catalog service base URL (e.g. `http://127.0.0.1:8081/`) |
 | `CART_IDENTITY_ISSUER_URL` | OIDC issuer / realm URL (e.g. `http://127.0.0.1:8101/realms/multcorp`) |
 | `CART_IDENTITY_CLIENT_ID` | Service-account client id for Admin API |
@@ -118,7 +118,12 @@ Release is in **`.github/workflows/release.yml`** when configured. Locally:
 docker build -f Dockerfile build/image
 ```
 
-Mount a volume at `/app/data` (or set `CART_DATA_PATH`) so cart data persists across restarts.
+Data is stored in the shared PostgreSQL `cart` schema (`cart.snapshot` JSONB table). Start Postgres from [sigma-pg](https://github.com/sigmatactical-org/sigma-pg):
+
+```bash
+git clone https://github.com/sigmatactical-org/sigma-pg
+cd sigma-pg && docker compose -f docker-compose.deps.yml up -d
+```
 
 ## License
 

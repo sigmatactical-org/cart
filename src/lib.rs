@@ -68,12 +68,12 @@ pub fn routes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use warp::http::StatusCode;
 
-    fn test_store() -> store::CartStore {
-        let dir = TempDir::new().unwrap();
-        store::CartStore::load(dir.path().join("carts.json")).unwrap()
+    async fn test_store() -> store::CartStore {
+        store::CartStore::connect_empty()
+            .await
+            .expect("PostgreSQL required for tests")
     }
 
     #[tokio::test]
@@ -81,7 +81,7 @@ mod tests {
         let res = warp::test::request()
             .method("GET")
             .path("/up")
-            .reply(&routes(test_store()))
+            .reply(&routes(test_store().await))
             .await;
         assert_eq!(res.status(), StatusCode::OK);
     }
@@ -91,7 +91,7 @@ mod tests {
         let res = warp::test::request()
             .method("GET")
             .path("/")
-            .reply(&routes(test_store()))
+            .reply(&routes(test_store().await))
             .await;
         assert_eq!(res.status(), StatusCode::OK);
         let body = std::str::from_utf8(res.body()).unwrap();
@@ -104,7 +104,7 @@ mod tests {
             .method("GET")
             .path("/carts")
             .header("accept", "application/json")
-            .reply(&routes(test_store()))
+            .reply(&routes(test_store().await))
             .await;
         assert_eq!(res.status(), StatusCode::OK);
         let body: Vec<serde_json::Value> = serde_json::from_slice(res.body()).unwrap();
@@ -118,7 +118,7 @@ mod tests {
             .path("/carts")
             .header("content-type", "application/json")
             .body(r#"{"note":"test cart"}"#)
-            .reply(&routes(test_store()))
+            .reply(&routes(test_store().await))
             .await;
         assert_eq!(res.status(), StatusCode::CREATED);
         let body: serde_json::Value = serde_json::from_slice(res.body()).unwrap();
@@ -127,7 +127,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_add_line() {
-        let store = test_store();
+        let store = test_store().await;
         let app = routes(store);
 
         let cart_res = warp::test::request()

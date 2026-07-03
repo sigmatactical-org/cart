@@ -7,7 +7,7 @@ fn main() -> Result<(), BoxError> {
         .enable_all()
         .build()?
         .block_on(async move {
-            let store = sigma_cart::store::CartStore::load(sigma_cart::config::data_path())?;
+            let store = sigma_cart::store::CartStore::connect().await?;
             let listener = tokio::net::TcpListener::bind(addr).await?;
             println!("Sigma Cart listening on http://{addr}");
             warp::serve(sigma_cart::routes(store))

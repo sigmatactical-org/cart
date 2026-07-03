@@ -1,11 +1,8 @@
-use std::path::PathBuf;
-
-/// Path to the JSON cart database.
+/// PostgreSQL connection URL (shared Sigma database).
 #[must_use]
-pub fn data_path() -> PathBuf {
-    std::env::var("CART_DATA_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("data/carts.json"))
+pub fn database_url() -> String {
+    std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| sigma_pg::DEFAULT_DATABASE_URL.to_string())
 }
 
 /// Base URL of the catalog service (e.g. `http://127.0.0.1:8081/`).

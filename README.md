@@ -150,11 +150,10 @@ Release is in **`.github/workflows/release.yml`** when configured. Locally:
 docker build -f Dockerfile build/image
 ```
 
-Data is stored in the shared PostgreSQL `cart` schema (`cart.document` JSONB table). Start Postgres from [sigma-pg](https://github.com/sigmatactical-org/sigma-pg):
+Data is stored in the shared PostgreSQL `cart` schema (`cart.document` JSONB table). Postgres runs in the [platform](https://github.com/sigmatactical-org/platform) kind stack — port-forward for local `cargo run`:
 
 ```bash
-git clone https://github.com/sigmatactical-org/sigma-pg
-cd sigma-pg && docker compose -f docker-compose.deps.yml up -d
+cd platform && ./scripts/postgres-dev.sh port-forward-bg && ./scripts/postgres-dev.sh migrate
 ```
 
 ## License

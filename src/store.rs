@@ -31,7 +31,7 @@ struct Database {
     carts: Vec<Cart>,
 }
 
-/// Cart snapshot as stored before reservations moved to the order service.
+/// Cart document as stored before reservations moved to the order service.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 struct LegacyDatabase {
     #[serde(default)]
@@ -47,10 +47,10 @@ pub struct CartStore {
 }
 
 impl CartStore {
-    /// Connect to PostgreSQL and load the cart snapshot.
+    /// Connect to PostgreSQL and load the cart document.
     pub async fn connect() -> Result<Self, StoreError> {
         let pool = sigma_pg::connect().await?;
-        let legacy: LegacyDatabase = sigma_pg::load_snapshot(&pool, SCHEMA).await?;
+        let legacy: LegacyDatabase = sigma_pg::load_document(&pool, SCHEMA).await?;
         let reservations = legacy.reservations;
         let db = Database {
             carts: legacy.carts,
@@ -59,9 +59,9 @@ impl CartStore {
             if crate::config::order_configured() {
                 match order::migrate_reservations(&reservations).await {
                     Ok(()) => {
-                        sigma_pg::save_snapshot(&pool, SCHEMA, &db).await?;
+                        sigma_pg::save_document(&pool, SCHEMA, &db).await?;
                         eprintln!(
-                            "migrated {} reservation(s) from cart snapshot to order service",
+                            "migrated {} reservation(s) from cart document to order service",
                             reservations.len()
                         );
                     }
@@ -71,7 +71,7 @@ impl CartStore {
                 }
             } else {
                 eprintln!(
-                    "warning: {} legacy reservation(s) remain in cart snapshot; set CART_ORDER_BASE_URL to migrate",
+                    "warning: {} legacy reservation(s) remain in cart document; set CART_ORDER_BASE_URL to migrate",
                     reservations.len()
                 );
             }
@@ -79,17 +79,17 @@ impl CartStore {
         Ok(Self { pool, db })
     }
 
-    /// Reset the cart snapshot (tests only).
+    /// Reset the cart document (tests only).
     #[cfg(test)]
     pub async fn connect_empty() -> Result<Self, StoreError> {
         let pool = sigma_pg::connect().await?;
         let db = Database::default();
-        sigma_pg::save_snapshot(&pool, SCHEMA, &db).await?;
+        sigma_pg::save_document(&pool, SCHEMA, &db).await?;
         Ok(Self { pool, db })
     }
 
     async fn persist(&self) -> Result<(), StoreError> {
-        sigma_pg::save_snapshot(&self.pool, SCHEMA, &self.db).await?;
+        sigma_pg::save_document(&self.pool, SCHEMA, &self.db).await?;
         Ok(())
     }
 

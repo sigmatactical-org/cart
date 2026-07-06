@@ -60,7 +60,7 @@ pub struct OrderLine {
     pub line_total_cents: u64,
 }
 
-/// Legacy reservation row stored in `cart.snapshot` before the order service existed.
+/// Legacy reservation row stored in `cart.document` before the order service existed.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct LegacyReservation {
     pub id: String,

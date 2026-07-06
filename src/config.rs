@@ -92,7 +92,7 @@ pub fn store_public_base_url() -> String {
 #[must_use]
 pub fn store_product_url(sku_code: &str) -> String {
     format!(
-        "{}products/{}",
+        "{}/products/{}",
         store_public_base_url().trim_end_matches('/'),
         sku_code.to_lowercase()
     )

@@ -88,6 +88,21 @@ pub fn store_public_base_url() -> String {
         .unwrap_or_else(|| "http://127.0.0.1:8082/".to_string())
 }
 
+/// Base URL of the order service (e.g. `http://127.0.0.1:8085/`).
+#[must_use]
+pub fn order_base_url() -> Option<String> {
+    std::env::var("CART_ORDER_BASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| normalize_base_url(&s))
+}
+
+/// Whether order service integration is configured.
+#[must_use]
+pub fn order_configured() -> bool {
+    order_base_url().is_some()
+}
+
 /// Public store URL for a product detail page (`/products/{sku_code}`).
 #[must_use]
 pub fn store_product_url(sku_code: &str) -> String {

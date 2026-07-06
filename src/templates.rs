@@ -3,17 +3,14 @@ use askama::Template;
 use crate::catalog::CatalogSku;
 use crate::config;
 use crate::identity::IdentityUser;
-use crate::model::{
-    Cart, CartStatus, Reservation, deposit_cents_for_price, format_price_cents, status_label,
-};
+use crate::model::{Cart, CartStatus, deposit_cents_for_price, format_price_cents, status_label};
+use crate::order::Order;
 use crate::storefront::PriceBook;
-use sigma_identity_nav::{auth_links, render_app_site_nav};
+use sigma_identity_nav::{AppSiteNav, auth_links, render_app_site_nav};
 use sigma_theme::copyright_years;
 
 fn keep_shopping_link(store_url: &str) -> String {
-    format!(
-        r#"<a class="btn btn-outline-light btn-sm" href="{store_url}">Keep shopping</a>"#
-    )
+    format!(r#"<a class="btn btn-outline-light btn-sm" href="{store_url}">Keep shopping</a>"#)
 }
 
 fn site_nav(
@@ -22,16 +19,16 @@ fn site_nav(
     show_contact_us: bool,
     leading_html: &str,
 ) -> Result<String, askama::Error> {
-    render_app_site_nav(
-        &config::identity_public_base_url(),
-        &config::public_base_url(),
-        &config::contact_public_base_url(),
-        "/",
+    render_app_site_nav(&AppSiteNav {
+        identity_base: &config::identity_public_base_url(),
+        app_base: &config::public_base_url(),
+        contact_base: &config::contact_public_base_url(),
+        cart_url: &config::public_base_url(),
         cart_count,
         return_path,
         show_contact_us,
         leading_html,
-    )
+    })
 }
 
 fn storefront_site_nav(cart_count: u32) -> Result<String, askama::Error> {
@@ -68,7 +65,7 @@ struct StorefrontCartTemplate {
 #[derive(Template)]
 #[template(path = "reserved.html")]
 struct ReservedTemplate {
-    reservation_id: String,
+    order_id: String,
     username: String,
     lines: Vec<ReservedLineRow>,
     subtotal_display: String,
@@ -160,10 +157,11 @@ pub fn render_storefront_cart_html(
                 line_id: l.line_id,
                 sku_code: l.sku_code.clone(),
                 name: l.name,
-                product_url: l
-                    .in_catalog
-                    .then(|| config::store_product_url(&l.sku_code))
-                    .unwrap_or_default(),
+                product_url: if l.in_catalog {
+                    config::store_product_url(&l.sku_code)
+                } else {
+                    String::new()
+                },
                 quantity: l.quantity,
                 unit_price_display: if priced {
                     format_price_cents(l.unit_price_cents)
@@ -203,8 +201,8 @@ pub fn render_storefront_cart_html(
 /// # Errors
 ///
 /// Returns [`askama::Error`] when template rendering fails.
-pub fn render_reserved_html(reservation: &Reservation) -> Result<String, askama::Error> {
-    let lines: Vec<ReservedLineRow> = reservation
+pub fn render_reserved_html(order: &Order) -> Result<String, askama::Error> {
+    let lines: Vec<ReservedLineRow> = order
         .lines
         .iter()
         .map(|l| ReservedLineRow {
@@ -216,11 +214,11 @@ pub fn render_reserved_html(reservation: &Reservation) -> Result<String, askama:
         })
         .collect();
     ReservedTemplate {
-        reservation_id: reservation.id.clone(),
-        username: reservation.username.clone(),
+        order_id: order.id.clone(),
+        username: order.username.clone(),
         lines,
-        subtotal_display: format_price_cents(reservation.subtotal_cents),
-        deposit_display: format_price_cents(reservation.deposit_cents),
+        subtotal_display: format_price_cents(order.subtotal_cents),
+        deposit_display: format_price_cents(order.deposit_cents),
         site_nav: storefront_site_nav(0)?,
         store_url: config::store_public_base_url(),
         copyright_years: copyright_years(),

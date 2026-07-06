@@ -1,9 +1,8 @@
 use sqlx::PgPool;
 use thiserror::Error;
 
-use crate::model::{
-    Cart, CartLine, CartStatus, CreateCart, CreateLine, Reservation, UpdateCart, UpdateLine,
-};
+use crate::model::{Cart, CartLine, CartStatus, CreateCart, CreateLine, UpdateCart, UpdateLine};
+use crate::order::{self, LegacyReservation};
 
 const SCHEMA: &str = "cart";
 
@@ -30,8 +29,15 @@ pub enum StoreError {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct Database {
     carts: Vec<Cart>,
+}
+
+/// Cart snapshot as stored before reservations moved to the order service.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct LegacyDatabase {
     #[serde(default)]
-    reservations: Vec<Reservation>,
+    carts: Vec<Cart>,
+    #[serde(default)]
+    reservations: Vec<LegacyReservation>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,7 +50,32 @@ impl CartStore {
     /// Connect to PostgreSQL and load the cart snapshot.
     pub async fn connect() -> Result<Self, StoreError> {
         let pool = sigma_pg::connect().await?;
-        let db: Database = sigma_pg::load_snapshot(&pool, SCHEMA).await?;
+        let legacy: LegacyDatabase = sigma_pg::load_snapshot(&pool, SCHEMA).await?;
+        let reservations = legacy.reservations;
+        let db = Database {
+            carts: legacy.carts,
+        };
+        if !reservations.is_empty() {
+            if crate::config::order_configured() {
+                match order::migrate_reservations(&reservations).await {
+                    Ok(()) => {
+                        sigma_pg::save_snapshot(&pool, SCHEMA, &db).await?;
+                        eprintln!(
+                            "migrated {} reservation(s) from cart snapshot to order service",
+                            reservations.len()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("warning: reservation migration to order service failed: {e}");
+                    }
+                }
+            } else {
+                eprintln!(
+                    "warning: {} legacy reservation(s) remain in cart snapshot; set CART_ORDER_BASE_URL to migrate",
+                    reservations.len()
+                );
+            }
+        }
         Ok(Self { pool, db })
     }
 
@@ -177,7 +208,7 @@ impl CartStore {
         self.persist().await
     }
 
-    /// Set a cart's status (used to mark a cart reserved/submitted at checkout).
+    /// Set a cart's status (used to mark a cart submitted at checkout).
     pub async fn set_status(
         &mut self,
         cart_id: &str,
@@ -192,21 +223,6 @@ impl CartStore {
         cart.status = status;
         cart.updated_at = chrono::Utc::now().to_rfc3339();
         self.persist().await
-    }
-
-    /// Record a reservation created when a shopper pays a deposit.
-    pub async fn create_reservation(
-        &mut self,
-        reservation: Reservation,
-    ) -> Result<Reservation, StoreError> {
-        self.db.reservations.push(reservation.clone());
-        self.persist().await?;
-        Ok(reservation)
-    }
-
-    #[must_use]
-    pub fn get_reservation(&self, id: &str) -> Option<Reservation> {
-        self.db.reservations.iter().find(|r| r.id == id).cloned()
     }
 
     fn validate_line_input(&self, input: &CreateLine) -> Result<(), StoreError> {

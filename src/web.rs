@@ -7,9 +7,8 @@ use warp::{Filter, Rejection, Reply};
 use crate::SharedStore;
 use crate::catalog;
 use crate::identity;
-use crate::model::{
-    CartForm, CartStatus, CreateLine, CreateReservationLine, LineForm, Reservation, UpdateLine,
-};
+use crate::model::{CartForm, CartStatus, CreateLine, LineForm, UpdateLine};
+use crate::order::{self, CreateOrderLine, CreateOrderRequest};
 use crate::store::StoreError;
 use crate::storefront;
 use crate::templates::{self, CartFormValues, IndexContext, LineFormValues};
@@ -258,33 +257,46 @@ fn reserve(
                 let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
                 let prices = storefront::fetch_prices().await.unwrap_or_default();
 
-                let reservation_lines: Vec<CreateReservationLine> =
+                let order_lines: Vec<CreateOrderLine> =
                     templates::priced_lines(&cart, &catalog_skus, &prices)
                         .into_iter()
                         .filter(|l| l.unit_price_cents > 0)
-                        .map(|l| CreateReservationLine {
+                        .map(|l| CreateOrderLine {
                             sku_id: l.sku_id,
                             sku_code: l.sku_code,
                             name: l.name,
                             quantity: l.quantity,
                             unit_price_cents: l.unit_price_cents,
+                            line_total_cents: None,
+                            deposit_cents: None,
                         })
                         .collect();
 
-                if username.is_empty() || reservation_lines.is_empty() {
+                if username.is_empty() || order_lines.is_empty() {
                     return Ok(redirect_to("/", None));
                 }
 
-                let reservation = Reservation::new(&cart_id, &username, reservation_lines);
-                let mut store = store.lock().await;
-                let reservation = match store.create_reservation(reservation).await {
-                    Ok(reservation) => reservation,
+                let order = match order::create_order(CreateOrderRequest {
+                    cart_id: cart_id.clone(),
+                    username,
+                    user_id: cart.user_id.clone(),
+                    lines: order_lines,
+                    id: None,
+                    status: None,
+                    subtotal_cents: None,
+                    deposit_cents: None,
+                    created_at: None,
+                })
+                .await
+                {
+                    Ok(order) => order,
                     Err(_) => return Ok(redirect_to("/", None)),
                 };
+                let mut store = store.lock().await;
                 let _ = store.set_status(&cart_id, CartStatus::Submitted).await;
                 drop(store);
 
-                let html = templates::render_reserved_html(&reservation)
+                let html = templates::render_reserved_html(&order)
                     .map_err(|_| warp::reject::not_found())?;
                 let reply = warp::reply::html(html);
                 Ok(

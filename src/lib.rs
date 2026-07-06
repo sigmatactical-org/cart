@@ -5,6 +5,7 @@ mod catalog;
 pub mod config;
 mod identity;
 mod model;
+mod order;
 pub mod store;
 mod storefront;
 mod templates;

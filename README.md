@@ -17,7 +17,7 @@ Shared site chrome comes from [sigma-theme](https://github.com/sigmatactical-org
 - **Add to cart** — `POST /add` accepts a catalog `sku_id` from any storefront; a guest cart is created on first add and tracked by a shared `sigma_cart` cookie
 - **Catalog integration** — validate and enrich line items from [sigma-catalog](https://github.com/sigmatactical-org/catalog)
 - **Pricing** — resolves authoritative unit prices from the store's `/items` feed (prices live on store listings, not the catalog)
-- **Reservations** — paying the deposit records a reservation and marks the cart reserved
+- **Orders** — paying the deposit creates an order in [sigma-order](../order) and marks the cart submitted
 - **Identity integration** — assign carts to users via Keycloak Admin API (same realm as [sigma-identity](https://github.com/sigmatactical-org/identity))
 - **Admin web UI + JSON API** — browse/edit carts behind sigma-identity
 
@@ -33,6 +33,7 @@ Shared site chrome comes from [sigma-theme](https://github.com/sigmatactical-org
 | `CART_IDENTITY_PUBLIC_URL` | Public identity BFF base URL for the reserve sign-in gate (default `http://127.0.0.1:3000/`) |
 | `CART_CONTACT_PUBLIC_URL` | Public contact service URL for the navbar link (default `http://127.0.0.1:8083/`) |
 | `CART_STORE_PUBLIC_URL` | Public store URL for the navbar "Keep shopping" link (default `http://127.0.0.1:8082/`) |
+| `CART_ORDER_BASE_URL` | Order service base URL for checkout commit (e.g. `http://127.0.0.1:8085/`) |
 | `CART_COOKIE_DOMAIN` | Cookie `Domain` so the `sigma_cart` cookie is shared with the storefront across sibling subdomains; leave blank in local dev |
 | `CART_IDENTITY_ISSUER_URL` | OIDC issuer / realm URL (e.g. `http://127.0.0.1:8101/realms/multcorp`) |
 | `CART_IDENTITY_CLIENT_ID` | Service-account client id for Admin API |
@@ -49,7 +50,7 @@ Each cart has:
 - optional `note`
 - `lines` — `[{ "sku_id", "quantity" }, …]` (only editable when status is `open`)
 
-Reserving a cart records a **reservation** (customer, line snapshot with unit/line prices, and the 50% deposit) and flips the cart to `submitted`.
+Reserving a cart creates an **order** in sigma-order (customer, line snapshot with unit/line prices, and the 50% deposit) and flips the cart to `submitted`. Legacy reservations stored in the cart snapshot are migrated to the order service on startup when `CART_ORDER_BASE_URL` is set.
 
 ## Public routes
 

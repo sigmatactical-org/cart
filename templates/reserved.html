@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Reservation confirmed — Sigma Cart{% endblock %}
+{% block title %}Order confirmed — Sigma Cart{% endblock %}
 
 {% block brand %}Sigma Cart{% endblock %}
 
@@ -16,7 +16,7 @@
     <div class="col-lg-8">
       <div class="card product-card">
         <div class="card-body">
-          <h1 class="h3 mb-2 product-title">Reservation confirmed</h1>
+          <h1 class="h3 mb-2 product-title">Order confirmed</h1>
           <p class="text-secondary mb-4">
             Thanks, {{ username }}. Your deposit reserves the build{% if lines.len() > 1 %}s{% endif %} below.
             Sigma Tactical Group will contact you to arrange payment and delivery.
@@ -60,7 +60,7 @@
             <dd class="col-5 text-end fs-5 fw-semibold product-price">{{ deposit_display }}</dd>
           </dl>
 
-          <p class="text-secondary small mb-4">Reservation reference: <code>{{ reservation_id }}</code></p>
+          <p class="text-secondary small mb-4">Order reference: <code>{{ order_id }}</code></p>
 
           <a class="btn btn-primary" href="{{ store_url|safe }}">Continue shopping</a>
         </div>

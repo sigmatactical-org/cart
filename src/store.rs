@@ -39,7 +39,7 @@ pub struct CartStore {
 
 impl CartStore {
     pub async fn connect() -> Result<Self, StoreError> {
-        let pool = sigma_pg::connect().await?;
+        let pool = sigma_pg::connect_as("cart").await?;
         Ok(Self { pool })
     }
 
@@ -77,7 +77,7 @@ impl CartStore {
         }
     }
 
-    pub async fn create(&mut self, input: CreateCart) -> Result<Cart, StoreError> {
+    pub async fn create(&self, input: CreateCart) -> Result<Cart, StoreError> {
         let cart = Cart::new(input);
         sqlx::query(
             "INSERT INTO cart.carts (id, user_id, status, note, updated_at) \
@@ -93,7 +93,7 @@ impl CartStore {
         Ok(cart)
     }
 
-    pub async fn update(&mut self, id: &str, input: UpdateCart) -> Result<Cart, StoreError> {
+    pub async fn update(&self, id: &str, input: UpdateCart) -> Result<Cart, StoreError> {
         let mut cart = self.get(id).await?.ok_or(StoreError::CartNotFound)?;
         cart.apply_update(input);
         sqlx::query(
@@ -110,7 +110,7 @@ impl CartStore {
         Ok(cart)
     }
 
-    pub async fn delete(&mut self, id: &str) -> Result<(), StoreError> {
+    pub async fn delete(&self, id: &str) -> Result<(), StoreError> {
         let result = sqlx::query("DELETE FROM cart.carts WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
@@ -121,11 +121,7 @@ impl CartStore {
         Ok(())
     }
 
-    pub async fn add_line(
-        &mut self,
-        cart_id: &str,
-        input: CreateLine,
-    ) -> Result<CartLine, StoreError> {
+    pub async fn add_line(&self, cart_id: &str, input: CreateLine) -> Result<CartLine, StoreError> {
         self.validate_line_input(&input)?;
         let cart = self.get(cart_id).await?.ok_or(StoreError::CartNotFound)?;
         if cart.status != CartStatus::Open {
@@ -149,7 +145,7 @@ impl CartStore {
     }
 
     pub async fn update_line(
-        &mut self,
+        &self,
         cart_id: &str,
         line_id: &str,
         input: UpdateLine,
@@ -185,7 +181,7 @@ impl CartStore {
         Ok(line)
     }
 
-    pub async fn delete_line(&mut self, cart_id: &str, line_id: &str) -> Result<(), StoreError> {
+    pub async fn delete_line(&self, cart_id: &str, line_id: &str) -> Result<(), StoreError> {
         let cart = self.get(cart_id).await?.ok_or(StoreError::CartNotFound)?;
         if cart.status != CartStatus::Open {
             return Err(StoreError::CartNotOpen);
@@ -202,11 +198,7 @@ impl CartStore {
         Ok(())
     }
 
-    pub async fn set_status(
-        &mut self,
-        cart_id: &str,
-        status: CartStatus,
-    ) -> Result<(), StoreError> {
+    pub async fn set_status(&self, cart_id: &str, status: CartStatus) -> Result<(), StoreError> {
         let now = Utc::now();
         let result =
             sqlx::query("UPDATE cart.carts SET status = $2, updated_at = $3 WHERE id = $1")

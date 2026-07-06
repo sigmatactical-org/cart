@@ -92,7 +92,7 @@ fn cart_view(
         .and(store)
         .and_then(|cookie: Option<String>, store: SharedStore| async move {
             let cart = match cart_id_from_cookie(cookie.as_deref()) {
-                Some(id) => store.lock().await.get(&id).await.ok().flatten(),
+                Some(id) => store.get(&id).await.ok().flatten(),
                 None => None,
             };
             let cart = cart.filter(|c| c.status == CartStatus::Open);
@@ -126,14 +126,10 @@ fn add_to_cart(
                 if sku_id.is_empty() {
                     return Ok::<_, Rejection>(redirect_to("/", None));
                 }
-                // Only real, active catalog SKUs can be added.
-                if let Ok(skus) = catalog::fetch_skus().await
-                    && catalog::validate_sku_id(&skus, &sku_id).is_err()
-                {
+                if catalog::require_active_sku(&sku_id).await.is_err() {
                     return Err(warp::reject::not_found());
                 }
 
-                let mut store = store.lock().await;
                 let mut set_cookie: Option<String> = None;
                 let cart_id = match cart_id_from_cookie(cookie.as_deref()) {
                     Some(id)
@@ -205,7 +201,7 @@ fn change_line(
                 let Some(cart_id) = cart_id_from_cookie(cookie.as_deref()) else {
                     return Ok::<_, Rejection>(redirect_to("/", None));
                 };
-                let mut store = store.lock().await;
+
                 let current = store
                     .get(&cart_id)
                     .await
@@ -213,7 +209,7 @@ fn change_line(
                     .flatten()
                     .and_then(|c| c.lines.into_iter().find(|l| l.id == line_id));
                 let Some(line) = current else {
-                    return Ok(redirect_to("/", None));
+                    return Ok::<_, Rejection>(redirect_to("/", None));
                 };
                 let _ = match action.as_str() {
                     "increment" => store
@@ -244,89 +240,104 @@ fn change_line(
         )
 }
 
-/// Reserve the cart by paying the deposit: `POST /reserve` (form: `username`).
+/// Reserve the cart by paying the deposit: `POST /reserve` (requires identity session).
 fn reserve(
     store: impl Filter<Extract = (SharedStore,), Error = Infallible> + Clone + Send + 'static,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone + Send + 'static {
-    #[derive(serde::Deserialize)]
-    struct ReserveForm {
-        username: String,
-    }
-
     warp::path("reserve")
         .and(warp::path::end())
         .and(warp::post())
         .and(warp::header::optional::<String>("cookie"))
-        .and(warp::body::form())
         .and(store)
-        .and_then(
-            |cookie: Option<String>, form: ReserveForm, store: SharedStore| async move {
-                let username = form.username.trim().to_string();
-                let Some(cart_id) = cart_id_from_cookie(cookie.as_deref()) else {
-                    return Ok::<_, Rejection>(redirect_to("/", None));
-                };
-                let cart = store
-                    .lock()
-                    .await
-                    .get(&cart_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .filter(|c| c.status == CartStatus::Open);
-                let Some(cart) = cart else {
-                    return Ok(redirect_to("/", None));
-                };
-                let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
-                let prices = storefront::fetch_prices().await.unwrap_or_default();
+        .and_then(|cookie: Option<String>, store: SharedStore| async move {
+            let Some(session) = sigma_pg::clients::session::fetch_identity_status(
+                &crate::config::identity_public_base_url(),
+                cookie.as_deref(),
+            )
+            .await
+            .map_err(|_| warp::reject::not_found())?
+            else {
+                return Ok::<_, Rejection>(redirect_to("/", None));
+            };
+            let username = session
+                .username
+                .or(session.email)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_default();
+            if username.is_empty() {
+                return Ok::<_, Rejection>(redirect_to("/", None));
+            }
 
-                let order_lines: Vec<CreateOrderLine> =
-                    templates::priced_lines(&cart, &catalog_skus, &prices)
-                        .into_iter()
-                        .filter(|l| l.unit_price_cents > 0)
-                        .map(|l| CreateOrderLine {
-                            sku_id: l.sku_id,
-                            sku_code: l.sku_code,
-                            name: l.name,
-                            quantity: l.quantity,
-                            unit_price_cents: l.unit_price_cents,
-                            line_total_cents: None,
-                            deposit_cents: None,
-                        })
-                        .collect();
-
-                if username.is_empty() || order_lines.is_empty() {
-                    return Ok(redirect_to("/", None));
-                }
-
-                let order = match order::create_order(CreateOrderRequest {
-                    cart_id: cart_id.clone(),
-                    username,
-                    user_id: cart.user_id.clone(),
-                    lines: order_lines,
-                    id: None,
-                    status: None,
-                    subtotal_cents: None,
-                    deposit_cents: None,
-                    created_at: None,
-                })
+            let Some(cart_id) = cart_id_from_cookie(cookie.as_deref()) else {
+                return Ok::<_, Rejection>(redirect_to("/", None));
+            };
+            let cart = store
+                .get(&cart_id)
                 .await
-                {
-                    Ok(order) => order,
-                    Err(_) => return Ok(redirect_to("/", None)),
-                };
-                let mut store = store.lock().await;
-                let _ = store.set_status(&cart_id, CartStatus::Submitted).await;
-                drop(store);
+                .ok()
+                .flatten()
+                .filter(|c| c.status == CartStatus::Open);
+            let Some(cart) = cart else {
+                return Ok::<_, Rejection>(redirect_to("/", None));
+            };
 
-                let html = templates::render_reserved_html(&order)
-                    .map_err(|_| warp::reject::not_found())?;
-                let reply = warp::reply::html(html);
-                Ok(
-                    warp::reply::with_header(reply, SET_COOKIE, clear_cart_cookie())
-                        .into_response(),
-                )
-            },
-        )
+            let catalog_skus = match catalog::fetch_skus().await {
+                Ok(skus) => skus,
+                Err(_) => return Ok(redirect_to("/", None)),
+            };
+            let prices = match storefront::fetch_prices().await {
+                Ok(prices) => prices,
+                Err(_) => return Ok(redirect_to("/", None)),
+            };
+
+            let order_lines: Vec<CreateOrderLine> =
+                templates::priced_lines(&cart, &catalog_skus, &prices)
+                    .into_iter()
+                    .filter(|l| l.unit_price_cents > 0)
+                    .map(|l| CreateOrderLine {
+                        sku_id: l.sku_id,
+                        sku_code: l.sku_code,
+                        name: l.name,
+                        quantity: l.quantity,
+                        unit_price_cents: l.unit_price_cents,
+                        line_total_cents: None,
+                        deposit_cents: None,
+                    })
+                    .collect();
+
+            if order_lines.is_empty() {
+                return Ok::<_, Rejection>(redirect_to("/", None));
+            }
+
+            let order = match order::create_order(CreateOrderRequest {
+                cart_id: cart_id.clone(),
+                username,
+                user_id: session.user_id.or(cart.user_id.clone()),
+                lines: order_lines,
+                id: None,
+                status: None,
+                subtotal_cents: None,
+                deposit_cents: None,
+                created_at: None,
+            })
+            .await
+            {
+                Ok(order) => order,
+                Err(e) => {
+                    tracing::warn!("order create failed: {e}");
+                    return Ok::<_, Rejection>(redirect_to("/", None));
+                }
+            };
+
+            if let Err(e) = store.set_status(&cart_id, CartStatus::Submitted).await {
+                tracing::warn!("cart submit after order {} failed: {e}", order.id);
+            }
+
+            let html =
+                templates::render_reserved_html(&order).map_err(|_| warp::reject::not_found())?;
+            let reply = warp::reply::html(html);
+            Ok(warp::reply::with_header(reply, SET_COOKIE, clear_cart_cookie()).into_response())
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -341,12 +352,7 @@ fn admin_index(
         .and(warp::get())
         .and(store)
         .and_then(|store: SharedStore| async move {
-            let carts = store
-                .lock()
-                .await
-                .list()
-                .await
-                .map_err(|_| warp::reject::not_found())?;
+            let carts = store.list().await.map_err(|_| warp::reject::not_found())?;
             let catalog_result = catalog::fetch_skus().await;
             let identity_result = identity::fetch_users().await;
             let (catalog_skus, catalog_error) = match catalog_result {
@@ -382,12 +388,7 @@ fn admin_new_cart(
         .and(warp::get())
         .and(store)
         .and_then(|store: SharedStore| async move {
-            let carts = store
-                .lock()
-                .await
-                .list()
-                .await
-                .map_err(|_| warp::reject::not_found())?;
+            let carts = store.list().await.map_err(|_| warp::reject::not_found())?;
             let identity_users = identity::fetch_users().await.unwrap_or_default();
             templates::render_cart_form_html(carts, &identity_users, None, None)
                 .map(warp::reply::html)
@@ -403,7 +404,6 @@ fn admin_create_cart(
         .and(warp::body::form())
         .and(store)
         .and_then(|form: CartForm, store: SharedStore| async move {
-            let mut store = store.lock().await;
             let carts = store.list().await.map_err(|_| warp::reject::not_found())?;
             let identity_users = identity::fetch_users().await.unwrap_or_default();
             let values = cart_form_to_values(&form);
@@ -448,7 +448,6 @@ fn admin_cart_detail(
         .and(warp::get())
         .and(store)
         .and_then(|id: String, store: SharedStore| async move {
-            let store = store.lock().await;
             let Some(cart) = store
                 .get(&id)
                 .await
@@ -473,7 +472,6 @@ fn admin_update_cart(
         .and(store)
         .and_then(
             |id: String, form: CartForm, store: SharedStore| async move {
-                let mut store = store.lock().await;
                 let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
                 let identity_users = identity::fetch_users().await.unwrap_or_default();
                 let values = cart_form_to_values(&form);
@@ -536,7 +534,6 @@ fn admin_add_line(
         .and(store)
         .and_then(
             |cart_id: String, form: LineForm, store: SharedStore| async move {
-                let mut store = store.lock().await;
                 let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
                 let identity_users = identity::fetch_users().await.unwrap_or_default();
                 let line_values = line_form_to_values(&form);
@@ -599,7 +596,6 @@ fn admin_delete_line(
         .and(store)
         .and_then(
             |cart_id: String, line_id: String, store: SharedStore| async move {
-                let mut store = store.lock().await;
                 let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
                 let identity_users = identity::fetch_users().await.unwrap_or_default();
                 match store.delete_line(&cart_id, &line_id).await {
@@ -629,7 +625,6 @@ fn admin_delete_cart(
         .and(warp::post())
         .and(store)
         .and_then(|id: String, store: SharedStore| async move {
-            let mut store = store.lock().await;
             let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
             let identity_users = identity::fetch_users().await.unwrap_or_default();
             match store.delete(&id).await {

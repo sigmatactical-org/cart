@@ -7,6 +7,7 @@ use crate::model::{
     Cart, CartStatus, Reservation, deposit_cents_for_price, format_price_cents, status_label,
 };
 use crate::storefront::PriceBook;
+use sigma_cart_nav::render_cart_nav;
 use sigma_identity_nav::{auth_links, render_auth_nav};
 use sigma_theme::copyright_years;
 
@@ -20,7 +21,7 @@ struct StorefrontCartTemplate {
     has_priced_items: bool,
     subtotal_display: String,
     deposit_display: String,
-    cart_count: u32,
+    cart_nav: String,
     auth_nav: String,
     sign_in_url: String,
     identity_base_url: String,
@@ -38,7 +39,7 @@ struct ReservedTemplate {
     lines: Vec<ReservedLineRow>,
     subtotal_display: String,
     deposit_display: String,
-    cart_count: u32,
+    cart_nav: String,
     auth_nav: String,
     contact_us_url: String,
     store_url: String,
@@ -150,7 +151,7 @@ pub fn render_storefront_cart_html(
         lines,
         subtotal_display: format_price_cents(subtotal_cents),
         deposit_display: format_price_cents(deposit_cents_for_price(subtotal_cents)),
-        cart_count,
+        cart_nav: render_cart_nav("/", cart_count)?,
         auth_nav: render_auth_nav(&links)?,
         sign_in_url: links.sign_in_url,
         identity_base_url: links.identity_base_url,
@@ -187,7 +188,7 @@ pub fn render_reserved_html(reservation: &Reservation) -> Result<String, askama:
         lines,
         subtotal_display: format_price_cents(reservation.subtotal_cents),
         deposit_display: format_price_cents(reservation.deposit_cents),
-        cart_count: 0,
+        cart_nav: render_cart_nav("/", 0)?,
         auth_nav: render_auth_nav(&links)?,
         contact_us_url: links.contact_us_url,
         store_url: config::store_public_base_url(),

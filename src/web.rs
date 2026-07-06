@@ -92,7 +92,7 @@ fn cart_view(
         .and(store)
         .and_then(|cookie: Option<String>, store: SharedStore| async move {
             let cart = match cart_id_from_cookie(cookie.as_deref()) {
-                Some(id) => store.lock().await.get(&id),
+                Some(id) => store.lock().await.get(&id).await.ok().flatten(),
                 None => None,
             };
             let cart = cart.filter(|c| c.status == CartStatus::Open);
@@ -136,7 +136,15 @@ fn add_to_cart(
                 let mut store = store.lock().await;
                 let mut set_cookie: Option<String> = None;
                 let cart_id = match cart_id_from_cookie(cookie.as_deref()) {
-                    Some(id) if store.get(&id).is_some_and(|c| c.status == CartStatus::Open) => id,
+                    Some(id) if store
+                        .get(&id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .is_some_and(|c| c.status == CartStatus::Open) =>
+                    {
+                        id
+                    }
                     _ => {
                         let cart = store
                             .create(Default::default())
@@ -150,6 +158,9 @@ fn add_to_cart(
                 // Merge with an existing line for the same SKU.
                 let existing = store
                     .get(&cart_id)
+                    .await
+                    .ok()
+                    .flatten()
                     .and_then(|c| c.lines.into_iter().find(|l| l.sku_id == sku_id));
                 let result = match existing {
                     Some(line) => store
@@ -196,6 +207,9 @@ fn change_line(
                 let mut store = store.lock().await;
                 let current = store
                     .get(&cart_id)
+                    .await
+                    .ok()
+                    .flatten()
                     .and_then(|c| c.lines.into_iter().find(|l| l.id == line_id));
                 let Some(line) = current else {
                     return Ok(redirect_to("/", None));
@@ -250,8 +264,15 @@ fn reserve(
                 let Some(cart_id) = cart_id_from_cookie(cookie.as_deref()) else {
                     return Ok::<_, Rejection>(redirect_to("/", None));
                 };
-                let cart = store.lock().await.get(&cart_id);
-                let Some(cart) = cart.filter(|c| c.status == CartStatus::Open) else {
+                let cart = store
+                    .lock()
+                    .await
+                    .get(&cart_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .filter(|c| c.status == CartStatus::Open);
+                let Some(cart) = cart else {
                     return Ok(redirect_to("/", None));
                 };
                 let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
@@ -319,7 +340,12 @@ fn admin_index(
         .and(warp::get())
         .and(store)
         .and_then(|store: SharedStore| async move {
-            let carts = store.lock().await.list();
+            let carts = store
+                .lock()
+                .await
+                .list()
+                .await
+                .map_err(|_| warp::reject::not_found())?;
             let catalog_result = catalog::fetch_skus().await;
             let identity_result = identity::fetch_users().await;
             let (catalog_skus, catalog_error) = match catalog_result {
@@ -355,7 +381,12 @@ fn admin_new_cart(
         .and(warp::get())
         .and(store)
         .and_then(|store: SharedStore| async move {
-            let carts = store.lock().await.list();
+            let carts = store
+                .lock()
+                .await
+                .list()
+                .await
+                .map_err(|_| warp::reject::not_found())?;
             let identity_users = identity::fetch_users().await.unwrap_or_default();
             templates::render_cart_form_html(carts, &identity_users, None, None)
                 .map(warp::reply::html)
@@ -372,7 +403,7 @@ fn admin_create_cart(
         .and(store)
         .and_then(|form: CartForm, store: SharedStore| async move {
             let mut store = store.lock().await;
-            let carts = store.list();
+            let carts = store.list().await.map_err(|_| warp::reject::not_found())?;
             let identity_users = identity::fetch_users().await.unwrap_or_default();
             let values = cart_form_to_values(&form);
             let response = match form.into_create() {
@@ -417,7 +448,7 @@ fn admin_cart_detail(
         .and(store)
         .and_then(|id: String, store: SharedStore| async move {
             let store = store.lock().await;
-            let Some(cart) = store.get(&id) else {
+            let Some(cart) = store.get(&id).await.map_err(|_| warp::reject::not_found())? else {
                 return Err(warp::reject::not_found());
             };
             let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
@@ -451,7 +482,7 @@ fn admin_update_cart(
                             )
                             .is_none()
                         {
-                            let cart = store.get(&id);
+                            let cart = store.get(&id).await.ok().flatten();
                             render_detail_error(
                                 cart,
                                 &catalog_skus,
@@ -463,7 +494,7 @@ fn admin_update_cart(
                             match store.update(&id, input).await {
                                 Ok(cart) => redirect(format!("/admin/carts/{}", cart.id)),
                                 Err(e) => {
-                                    let cart = store.get(&id);
+                                    let cart = store.get(&id).await.ok().flatten();
                                     render_detail_error(
                                         cart,
                                         &catalog_skus,
@@ -476,7 +507,7 @@ fn admin_update_cart(
                         }
                     }
                     Err(e) => {
-                        let cart = store.get(&id);
+                                    let cart = store.get(&id).await.ok().flatten();
                         render_detail_error(
                             cart,
                             &catalog_skus,
@@ -509,7 +540,7 @@ fn admin_add_line(
                         if !catalog_skus.is_empty()
                             && catalog::validate_sku_id(&catalog_skus, input.sku_id.trim()).is_err()
                         {
-                            let cart = store.get(&cart_id);
+                            let cart = store.get(&cart_id).await.ok().flatten();
                             render_detail_line_error(
                                 cart,
                                 &catalog_skus,
@@ -527,7 +558,7 @@ fn admin_add_line(
                                     return Err(warp::reject::not_found());
                                 }
                                 Err(e) => {
-                                    let cart = store.get(&cart_id);
+                                    let cart = store.get(&cart_id).await.ok().flatten();
                                     render_detail_line_error(
                                         cart,
                                         &catalog_skus,
@@ -540,7 +571,7 @@ fn admin_add_line(
                         }
                     }
                     Err(e) => {
-                        let cart = store.get(&cart_id);
+                                    let cart = store.get(&cart_id).await.ok().flatten();
                         render_detail_line_error(
                             cart,
                             &catalog_skus,
@@ -572,7 +603,7 @@ fn admin_delete_line(
                         Err(warp::reject::not_found())
                     }
                     Err(e) => {
-                        let cart = store.get(&cart_id);
+                                    let cart = store.get(&cart_id).await.ok().flatten();
                         Ok(render_detail_line_error(
                             cart,
                             &catalog_skus,
@@ -599,20 +630,23 @@ fn admin_delete_cart(
             match store.delete(&id).await {
                 Ok(()) => Ok(redirect("/admin".to_string())),
                 Err(StoreError::CartNotFound) => Err(warp::reject::not_found()),
-                Err(e) => templates::render_index_html(
-                    store.list(),
-                    IndexContext {
-                        catalog_skus: &catalog_skus,
-                        identity_users: &identity_users,
-                        catalog_configured: crate::config::catalog_configured(),
-                        identity_configured: crate::config::identity_configured(),
-                        catalog_error: None,
-                        identity_error: None,
-                        message: Some(format!("Delete failed: {e}")),
-                    },
-                )
-                .map(|html| warp::reply::html(html).into_response())
-                .map_err(|_| warp::reject::not_found()),
+                Err(e) => {
+                    let carts = store.list().await.map_err(|_| warp::reject::not_found())?;
+                    Ok(templates::render_index_html(
+                        carts,
+                        IndexContext {
+                            catalog_skus: &catalog_skus,
+                            identity_users: &identity_users,
+                            catalog_configured: crate::config::catalog_configured(),
+                            identity_configured: crate::config::identity_configured(),
+                            catalog_error: None,
+                            identity_error: None,
+                            message: Some(format!("Delete failed: {e}")),
+                        },
+                    )
+                    .map(|html| warp::reply::html(html).into_response())
+                    .map_err(|_| warp::reject::not_found())?)
+                }
             }
         })
 }

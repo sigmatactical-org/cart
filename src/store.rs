@@ -1,10 +1,10 @@
-use sqlx::PgPool;
+use std::collections::HashMap;
+
+use chrono::{DateTime, Utc};
+use sqlx::{PgPool, Row};
 use thiserror::Error;
 
 use crate::model::{Cart, CartLine, CartStatus, CreateCart, CreateLine, UpdateCart, UpdateLine};
-use crate::order::{self, LegacyReservation};
-
-const SCHEMA: &str = "cart";
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -26,114 +26,99 @@ pub enum StoreError {
     InvalidInput(String),
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-struct Database {
-    carts: Vec<Cart>,
-}
-
-/// Cart document as stored before reservations moved to the order service.
-#[derive(Debug, Clone, Default, serde::Deserialize)]
-struct LegacyDatabase {
-    #[serde(default)]
-    carts: Vec<Cart>,
-    #[serde(default)]
-    reservations: Vec<LegacyReservation>,
+impl From<sqlx::Error> for StoreError {
+    fn from(err: sqlx::Error) -> Self {
+        Self::Database(err.into())
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct CartStore {
     pool: PgPool,
-    db: Database,
 }
 
 impl CartStore {
-    /// Connect to PostgreSQL and load the cart document.
     pub async fn connect() -> Result<Self, StoreError> {
         let pool = sigma_pg::connect().await?;
-        let legacy: LegacyDatabase = sigma_pg::load_document(&pool, SCHEMA).await?;
-        let reservations = legacy.reservations;
-        let db = Database {
-            carts: legacy.carts,
-        };
-        if !reservations.is_empty() {
-            if crate::config::order_configured() {
-                match order::migrate_reservations(&reservations).await {
-                    Ok(()) => {
-                        sigma_pg::save_document(&pool, SCHEMA, &db).await?;
-                        eprintln!(
-                            "migrated {} reservation(s) from cart document to order service",
-                            reservations.len()
-                        );
-                    }
-                    Err(e) => {
-                        eprintln!("warning: reservation migration to order service failed: {e}");
-                    }
-                }
-            } else {
-                eprintln!(
-                    "warning: {} legacy reservation(s) remain in cart document; set CART_ORDER_BASE_URL to migrate",
-                    reservations.len()
-                );
-            }
-        }
-        Ok(Self { pool, db })
+        Ok(Self { pool })
     }
 
-    /// Reset the cart document (tests only).
     #[cfg(test)]
     pub async fn connect_empty() -> Result<Self, StoreError> {
-        let pool = sigma_pg::connect().await?;
-        let db = Database::default();
-        sigma_pg::save_document(&pool, SCHEMA, &db).await?;
-        Ok(Self { pool, db })
+        let store = Self::connect().await?;
+        sqlx::query("TRUNCATE cart.cart_lines, cart.carts")
+            .execute(&store.pool)
+            .await?;
+        Ok(store)
     }
 
-    async fn persist(&self) -> Result<(), StoreError> {
-        sigma_pg::save_document(&self.pool, SCHEMA, &self.db).await?;
-        Ok(())
+    pub async fn list(&self) -> Result<Vec<Cart>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT id, user_id, status, note, updated_at FROM cart.carts ORDER BY updated_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        self.rows_to_carts(rows).await
     }
 
-    #[must_use]
-    pub fn list(&self) -> Vec<Cart> {
-        let mut carts = self.db.carts.clone();
-        carts.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        carts
-    }
-
-    #[must_use]
-    pub fn get(&self, id: &str) -> Option<Cart> {
-        self.db.carts.iter().find(|c| c.id == id).cloned()
+    pub async fn get(&self, id: &str) -> Result<Option<Cart>, StoreError> {
+        let row = sqlx::query(
+            "SELECT id, user_id, status, note, updated_at FROM cart.carts WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            Some(row) => {
+                let carts = self.rows_to_carts(vec![row]).await?;
+                Ok(carts.into_iter().next())
+            }
+            None => Ok(None),
+        }
     }
 
     pub async fn create(&mut self, input: CreateCart) -> Result<Cart, StoreError> {
         let cart = Cart::new(input);
-        self.db.carts.push(cart.clone());
-        self.persist().await?;
+        sqlx::query(
+            "INSERT INTO cart.carts (id, user_id, status, note, updated_at) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&cart.id)
+        .bind(&cart.user_id)
+        .bind(status_str(cart.status))
+        .bind(&cart.note)
+        .bind(parse_ts(&cart.updated_at)?)
+        .execute(&self.pool)
+        .await?;
         Ok(cart)
     }
 
     pub async fn update(&mut self, id: &str, input: UpdateCart) -> Result<Cart, StoreError> {
-        let cart = self
-            .db
-            .carts
-            .iter_mut()
-            .find(|c| c.id == id)
-            .ok_or(StoreError::CartNotFound)?;
+        let mut cart = self.get(id).await?.ok_or(StoreError::CartNotFound)?;
         cart.apply_update(input);
-        let updated = cart.clone();
-        self.persist().await?;
-        Ok(updated)
+        sqlx::query(
+            "UPDATE cart.carts SET user_id = $2, status = $3, note = $4, updated_at = $5 \
+             WHERE id = $1",
+        )
+        .bind(&cart.id)
+        .bind(&cart.user_id)
+        .bind(status_str(cart.status))
+        .bind(&cart.note)
+        .bind(parse_ts(&cart.updated_at)?)
+        .execute(&self.pool)
+        .await?;
+        Ok(cart)
     }
 
     pub async fn delete(&mut self, id: &str) -> Result<(), StoreError> {
-        let index = self
-            .db
-            .carts
-            .iter()
-            .position(|c| c.id == id)
-            .ok_or(StoreError::CartNotFound)?;
-        self.db.carts.remove(index);
-        self.persist().await
+        let result = sqlx::query("DELETE FROM cart.carts WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::CartNotFound);
+        }
+        Ok(())
     }
 
     pub async fn add_line(
@@ -142,19 +127,24 @@ impl CartStore {
         input: CreateLine,
     ) -> Result<CartLine, StoreError> {
         self.validate_line_input(&input)?;
-        let cart = self
-            .db
-            .carts
-            .iter_mut()
-            .find(|c| c.id == cart_id)
-            .ok_or(StoreError::CartNotFound)?;
+        let cart = self.get(cart_id).await?.ok_or(StoreError::CartNotFound)?;
         if cart.status != CartStatus::Open {
             return Err(StoreError::CartNotOpen);
         }
         let line = CartLine::new(input);
-        cart.lines.push(line.clone());
-        cart.updated_at = chrono::Utc::now().to_rfc3339();
-        self.persist().await?;
+        let now = parse_ts(&line.updated_at)?;
+        sqlx::query(
+            "INSERT INTO cart.cart_lines (id, cart_id, sku_id, quantity, updated_at) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&line.id)
+        .bind(cart_id)
+        .bind(&line.sku_id)
+        .bind(line.quantity as i32)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        touch_cart(cart_id, &self.pool).await?;
         Ok(line)
     }
 
@@ -167,62 +157,102 @@ impl CartStore {
         if input.quantity == 0 {
             return Err(StoreError::InvalidQuantity);
         }
-        let cart = self
-            .db
-            .carts
-            .iter_mut()
-            .find(|c| c.id == cart_id)
-            .ok_or(StoreError::CartNotFound)?;
+        let cart = self.get(cart_id).await?.ok_or(StoreError::CartNotFound)?;
         if cart.status != CartStatus::Open {
             return Err(StoreError::CartNotOpen);
         }
-        let line = cart
+        let mut line = cart
             .lines
-            .iter_mut()
+            .into_iter()
             .find(|l| l.id == line_id)
             .ok_or(StoreError::LineNotFound)?;
         line.apply_update(input.quantity);
-        let updated = line.clone();
-        cart.updated_at = chrono::Utc::now().to_rfc3339();
-        self.persist().await?;
-        Ok(updated)
+        let now = parse_ts(&line.updated_at)?;
+        let result = sqlx::query(
+            "UPDATE cart.cart_lines SET quantity = $3, updated_at = $4 \
+             WHERE id = $1 AND cart_id = $2",
+        )
+        .bind(line_id)
+        .bind(cart_id)
+        .bind(line.quantity as i32)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::LineNotFound);
+        }
+        touch_cart(cart_id, &self.pool).await?;
+        Ok(line)
     }
 
     pub async fn delete_line(&mut self, cart_id: &str, line_id: &str) -> Result<(), StoreError> {
-        let cart = self
-            .db
-            .carts
-            .iter_mut()
-            .find(|c| c.id == cart_id)
-            .ok_or(StoreError::CartNotFound)?;
+        let cart = self.get(cart_id).await?.ok_or(StoreError::CartNotFound)?;
         if cart.status != CartStatus::Open {
             return Err(StoreError::CartNotOpen);
         }
-        let index = cart
-            .lines
-            .iter()
-            .position(|l| l.id == line_id)
-            .ok_or(StoreError::LineNotFound)?;
-        cart.lines.remove(index);
-        cart.updated_at = chrono::Utc::now().to_rfc3339();
-        self.persist().await
+        let result = sqlx::query(
+            "DELETE FROM cart.cart_lines WHERE id = $1 AND cart_id = $2",
+        )
+        .bind(line_id)
+        .bind(cart_id)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::LineNotFound);
+        }
+        touch_cart(cart_id, &self.pool).await?;
+        Ok(())
     }
 
-    /// Set a cart's status (used to mark a cart submitted at checkout).
     pub async fn set_status(
         &mut self,
         cart_id: &str,
         status: CartStatus,
     ) -> Result<(), StoreError> {
-        let cart = self
-            .db
-            .carts
-            .iter_mut()
-            .find(|c| c.id == cart_id)
-            .ok_or(StoreError::CartNotFound)?;
-        cart.status = status;
-        cart.updated_at = chrono::Utc::now().to_rfc3339();
-        self.persist().await
+        let now = Utc::now();
+        let result = sqlx::query(
+            "UPDATE cart.carts SET status = $2, updated_at = $3 WHERE id = $1",
+        )
+        .bind(cart_id)
+        .bind(status_str(status))
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            return Err(StoreError::CartNotFound);
+        }
+        Ok(())
+    }
+
+    async fn rows_to_carts(
+        &self,
+        rows: Vec<sqlx::postgres::PgRow>,
+    ) -> Result<Vec<Cart>, StoreError> {
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<String> = rows.iter().map(|r| r.get("id")).collect();
+        let line_rows = sqlx::query(
+            "SELECT id, cart_id, sku_id, quantity, updated_at FROM cart.cart_lines \
+             WHERE cart_id = ANY($1) ORDER BY cart_id, id",
+        )
+        .bind(&ids)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut lines: HashMap<String, Vec<CartLine>> = HashMap::new();
+        for row in line_rows {
+            let cart_id: String = row.get("cart_id");
+            lines
+                .entry(cart_id)
+                .or_default()
+                .push(row_to_line(row)?);
+        }
+        rows.into_iter()
+            .map(|row| {
+                let id: String = row.get("id");
+                row_to_cart(row, lines.remove(&id).unwrap_or_default())
+            })
+            .collect()
     }
 
     fn validate_line_input(&self, input: &CreateLine) -> Result<(), StoreError> {
@@ -234,6 +264,57 @@ impl CartStore {
         }
         Ok(())
     }
+}
+
+async fn touch_cart(cart_id: &str, pool: &PgPool) -> Result<(), StoreError> {
+    sqlx::query("UPDATE cart.carts SET updated_at = now() WHERE id = $1")
+        .bind(cart_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+fn row_to_cart(row: sqlx::postgres::PgRow, lines: Vec<CartLine>) -> Result<Cart, StoreError> {
+    let status_str: String = row.get("status");
+    Ok(Cart {
+        id: row.get("id"),
+        user_id: row.get("user_id"),
+        status: parse_status(&status_str),
+        lines,
+        note: row.get("note"),
+        updated_at: row.get::<DateTime<Utc>, _>("updated_at").to_rfc3339(),
+    })
+}
+
+fn row_to_line(row: sqlx::postgres::PgRow) -> Result<CartLine, StoreError> {
+    Ok(CartLine {
+        id: row.get("id"),
+        sku_id: row.get("sku_id"),
+        quantity: row.get::<i32, _>("quantity") as u32,
+        updated_at: row.get::<DateTime<Utc>, _>("updated_at").to_rfc3339(),
+    })
+}
+
+fn status_str(status: CartStatus) -> &'static str {
+    match status {
+        CartStatus::Open => "open",
+        CartStatus::Submitted => "submitted",
+        CartStatus::Cancelled => "cancelled",
+    }
+}
+
+fn parse_status(value: &str) -> CartStatus {
+    match value {
+        "submitted" => CartStatus::Submitted,
+        "cancelled" => CartStatus::Cancelled,
+        _ => CartStatus::Open,
+    }
+}
+
+fn parse_ts(value: &str) -> Result<DateTime<Utc>, StoreError> {
+    value
+        .parse::<DateTime<Utc>>()
+        .map_err(|e| StoreError::InvalidInput(format!("invalid timestamp: {e}")))
 }
 
 #[cfg(test)]
@@ -267,7 +348,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(line.quantity, 2);
-        let updated = store.get(&cart.id).unwrap();
+        let updated = store.get(&cart.id).await.unwrap().unwrap();
         assert_eq!(updated.lines.len(), 1);
     }
 

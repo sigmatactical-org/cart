@@ -50,7 +50,7 @@ Each cart has:
 - optional `note`
 - `lines` — `[{ "sku_id", "quantity" }, …]` (only editable when status is `open`)
 
-Reserving a cart creates an **order** in sigma-order (customer, line snapshot with unit/line prices, and the 50% deposit) and flips the cart to `submitted`. Legacy reservations stored in the cart snapshot are migrated to the order service on startup when `CART_ORDER_BASE_URL` is set.
+Reserving a cart creates an **order** in sigma-order (customer, line items with unit/line prices, and the 50% deposit) and flips the cart to `submitted`.
 
 ## Public routes
 
@@ -116,13 +116,13 @@ Standalone clone:
 cargo run -p sigma-cart
 ```
 
-Under the sigma workspace (`sigma/it/commerce/cart`):
+Under the sigma workspace (`sigma/it/cart`):
 
 ```bash
-cd sigma/it/commerce/cart && ./scripts/prepare-local.sh && cargo run -p sigma-cart
+cd sigma/it/cart && ./scripts/prepare-local.sh && cargo run -p sigma-cart
 # or prepare all commerce services:
-(cd sigma/it/commerce && ./scripts/prepare-local.sh)
-(cd sigma/it/commerce && cargo run -p sigma-cart)
+(cd sigma/it && ./scripts/prepare-commerce-local.sh)
+(cd sigma/it && cargo run -p sigma-cart)
 ```
 
 Open http://localhost:8080
@@ -150,7 +150,7 @@ Release is in **`.github/workflows/release.yml`** when configured. Locally:
 docker build -f Dockerfile build/image
 ```
 
-Data is stored in the shared PostgreSQL `cart` schema (`cart.document` JSONB table). Postgres runs in the [platform](https://github.com/sigmatactical-org/platform) kind stack — port-forward for local `cargo run`:
+Data is stored in the shared PostgreSQL `cart` schema (`cart.carts` and `cart.cart_lines` relational tables). Postgres runs in the [platform](https://github.com/sigmatactical-org/platform) kind stack — port-forward for local `cargo run`:
 
 ```bash
 cd platform && ./scripts/postgres-dev.sh port-forward-bg && ./scripts/postgres-dev.sh migrate

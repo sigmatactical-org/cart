@@ -135,7 +135,8 @@ fn list_carts(
         .and(warp::get())
         .and(store)
         .and_then(|store: SharedStore| async move {
-            let carts = store.lock().await.list();
+            let store = store.lock().await;
+            let carts = store.list().await.map_err(|_| warp::reject::not_found())?;
             let mut details = Vec::with_capacity(carts.len());
             for cart in carts {
                 details.push(enrich_cart(cart).await);
@@ -153,7 +154,7 @@ fn get_cart(
         .and(store)
         .and_then(|id: String, store: SharedStore| async move {
             let store = store.lock().await;
-            let Some(cart) = store.get(&id) else {
+            let Some(cart) = store.get(&id).await.map_err(|_| warp::reject::not_found())? else {
                 return Err(warp::reject::not_found());
             };
             Ok(warp::reply::json(&enrich_cart(cart).await))

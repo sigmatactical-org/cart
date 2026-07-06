@@ -6,8 +6,11 @@ pub async fn fetch_skus() -> Result<Vec<CatalogSku>, CatalogError> {
 
 pub use sigma_pg::clients::catalog::{sku_by_id, validate_sku_id};
 
-/// Fail-closed SKU validation for mutations.
+/// Fail-closed SKU validation for mutations when catalog integration is configured.
 pub async fn require_active_sku(sku_id: &str) -> Result<(), CatalogError> {
+    if !crate::config::catalog_configured() {
+        return Ok(());
+    }
     let skus = fetch_skus().await?;
     validate_sku_id(&skus, sku_id.trim())
 }

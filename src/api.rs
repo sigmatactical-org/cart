@@ -400,6 +400,7 @@ fn delete_line(
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct StoreReject(StoreError);
 
 impl warp::reject::Reject for StoreReject {}

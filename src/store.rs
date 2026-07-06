@@ -315,7 +315,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_cart_and_add_line() {
-        let mut store = test_store().await;
+        let store = test_store().await;
         let cart = store
             .create(CreateCart {
                 user_id: Some("user-1".to_string()),
@@ -340,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn reject_line_on_submitted_cart() {
-        let mut store = test_store().await;
+        let store = test_store().await;
         let cart = store.create(CreateCart::default()).await.unwrap();
         store
             .update(

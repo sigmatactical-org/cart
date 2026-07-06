@@ -154,7 +154,11 @@ fn get_cart(
         .and(store)
         .and_then(|id: String, store: SharedStore| async move {
             let store = store.lock().await;
-            let Some(cart) = store.get(&id).await.map_err(|_| warp::reject::not_found())? else {
+            let Some(cart) = store
+                .get(&id)
+                .await
+                .map_err(|_| warp::reject::not_found())?
+            else {
                 return Err(warp::reject::not_found());
             };
             Ok(warp::reply::json(&enrich_cart(cart).await))

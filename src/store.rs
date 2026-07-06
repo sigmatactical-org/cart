@@ -190,13 +190,11 @@ impl CartStore {
         if cart.status != CartStatus::Open {
             return Err(StoreError::CartNotOpen);
         }
-        let result = sqlx::query(
-            "DELETE FROM cart.cart_lines WHERE id = $1 AND cart_id = $2",
-        )
-        .bind(line_id)
-        .bind(cart_id)
-        .execute(&self.pool)
-        .await?;
+        let result = sqlx::query("DELETE FROM cart.cart_lines WHERE id = $1 AND cart_id = $2")
+            .bind(line_id)
+            .bind(cart_id)
+            .execute(&self.pool)
+            .await?;
         if result.rows_affected() == 0 {
             return Err(StoreError::LineNotFound);
         }
@@ -210,14 +208,13 @@ impl CartStore {
         status: CartStatus,
     ) -> Result<(), StoreError> {
         let now = Utc::now();
-        let result = sqlx::query(
-            "UPDATE cart.carts SET status = $2, updated_at = $3 WHERE id = $1",
-        )
-        .bind(cart_id)
-        .bind(status_str(status))
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
+        let result =
+            sqlx::query("UPDATE cart.carts SET status = $2, updated_at = $3 WHERE id = $1")
+                .bind(cart_id)
+                .bind(status_str(status))
+                .bind(now)
+                .execute(&self.pool)
+                .await?;
         if result.rows_affected() == 0 {
             return Err(StoreError::CartNotFound);
         }
@@ -242,10 +239,7 @@ impl CartStore {
         let mut lines: HashMap<String, Vec<CartLine>> = HashMap::new();
         for row in line_rows {
             let cart_id: String = row.get("cart_id");
-            lines
-                .entry(cart_id)
-                .or_default()
-                .push(row_to_line(row)?);
+            lines.entry(cart_id).or_default().push(row_to_line(row)?);
         }
         rows.into_iter()
             .map(|row| {

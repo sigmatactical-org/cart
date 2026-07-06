@@ -52,6 +52,11 @@ impl CartStore {
         Ok(store)
     }
 
+    #[must_use]
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     pub async fn list(&self) -> Result<Vec<Cart>, StoreError> {
         let rows = sqlx::query(
             "SELECT id, user_id, status, note, updated_at FROM cart.carts ORDER BY updated_at DESC",

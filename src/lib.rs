@@ -54,11 +54,13 @@ pub fn routes(
 ) -> impl Filter<Extract = (impl Reply,), Error = Infallible> + Clone + Send + 'static {
     use warp::reply::with::header;
 
+    let health_pool = Arc::new(store.pool().clone());
     let store = Arc::new(store);
 
     warp::path("up")
         .and(warp::get())
         .map(|| warp::reply::with_status("up", warp::http::StatusCode::OK))
+        .or(sigma_pg::health::warp::health_routes("cart", Some(health_pool)))
         .or(web::routes(with_store(store.clone())))
         .or(api::routes(with_store(store)))
         .or(sigma_theme::warp::static_files())

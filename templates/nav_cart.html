@@ -1,6 +1,6 @@
 <div class="d-flex align-items-center gap-2">
   <a class="btn btn-outline-light btn-sm" href="{{ store_url|safe }}">Keep shopping</a>
-  {% include "nav_sign_in.html" %}
+  {{ auth_nav|safe }}
   <a
     class="btn btn-outline-light btn-sm position-relative"
     href="/"

@@ -21,6 +21,7 @@ if [[ -n "$THEME_HELPER" ]]; then
   write_theme_patch_files "$ROOT"
   write_commerce_workspace_patch "$ROOT"
   write_sigma_pg_patch "$ROOT"
+  write_identity_nav_patch "$ROOT"
   write_askama_config "$ROOT"
   build_theme_ts "$ROOT"
 else

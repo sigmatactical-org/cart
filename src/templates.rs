@@ -1,12 +1,13 @@
 use askama::Template;
 
-use crate::auth_links;
 use crate::catalog::CatalogSku;
+use crate::config;
 use crate::identity::IdentityUser;
 use crate::model::{
     Cart, CartStatus, Reservation, deposit_cents_for_price, format_price_cents, status_label,
 };
 use crate::storefront::PriceBook;
+use sigma_identity_nav::{auth_links, render_auth_nav};
 use sigma_theme::copyright_years;
 
 /// Public shopping cart view: line items, quantity steppers, totals, and the
@@ -20,11 +21,10 @@ struct StorefrontCartTemplate {
     subtotal_display: String,
     deposit_display: String,
     cart_count: u32,
+    auth_nav: String,
     sign_in_url: String,
-    logout_url: String,
     identity_base_url: String,
     contact_us_url: String,
-    edit_profile_url: String,
     store_url: String,
     copyright_years: String,
 }
@@ -39,11 +39,8 @@ struct ReservedTemplate {
     subtotal_display: String,
     deposit_display: String,
     cart_count: u32,
-    sign_in_url: String,
-    logout_url: String,
-    identity_base_url: String,
+    auth_nav: String,
     contact_us_url: String,
-    edit_profile_url: String,
     store_url: String,
     copyright_years: String,
 }
@@ -141,7 +138,12 @@ pub fn render_storefront_cart_html(
             }
         })
         .collect();
-    let auth = auth_links::auth_links_for_return_path("/");
+    let links = auth_links(
+        &config::identity_public_base_url(),
+        &config::public_base_url(),
+        &config::contact_public_base_url(),
+        "/",
+    );
     StorefrontCartTemplate {
         has_items: !lines.is_empty(),
         has_priced_items,
@@ -149,12 +151,11 @@ pub fn render_storefront_cart_html(
         subtotal_display: format_price_cents(subtotal_cents),
         deposit_display: format_price_cents(deposit_cents_for_price(subtotal_cents)),
         cart_count,
-        sign_in_url: auth.sign_in_url,
-        logout_url: auth.logout_url,
-        identity_base_url: auth.identity_base_url,
-        contact_us_url: auth.contact_us_url,
-        edit_profile_url: auth.edit_profile_url,
-        store_url: auth.store_url,
+        auth_nav: render_auth_nav(&links)?,
+        sign_in_url: links.sign_in_url,
+        identity_base_url: links.identity_base_url,
+        contact_us_url: links.contact_us_url,
+        store_url: config::store_public_base_url(),
         copyright_years: copyright_years(),
     }
     .render()
@@ -174,7 +175,12 @@ pub fn render_reserved_html(reservation: &Reservation) -> Result<String, askama:
             line_total_display: format_price_cents(l.line_total_cents),
         })
         .collect();
-    let auth = auth_links::auth_links_for_return_path("/");
+    let links = auth_links(
+        &config::identity_public_base_url(),
+        &config::public_base_url(),
+        &config::contact_public_base_url(),
+        "/",
+    );
     ReservedTemplate {
         reservation_id: reservation.id.clone(),
         username: reservation.username.clone(),
@@ -182,12 +188,9 @@ pub fn render_reserved_html(reservation: &Reservation) -> Result<String, askama:
         subtotal_display: format_price_cents(reservation.subtotal_cents),
         deposit_display: format_price_cents(reservation.deposit_cents),
         cart_count: 0,
-        sign_in_url: auth.sign_in_url,
-        logout_url: auth.logout_url,
-        identity_base_url: auth.identity_base_url,
-        contact_us_url: auth.contact_us_url,
-        edit_profile_url: auth.edit_profile_url,
-        store_url: auth.store_url,
+        auth_nav: render_auth_nav(&links)?,
+        contact_us_url: links.contact_us_url,
+        store_url: config::store_public_base_url(),
         copyright_years: copyright_years(),
     }
     .render()

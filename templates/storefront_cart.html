@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}Your cart — Sigma Cart{% endblock %}
+
+{% block brand %}Sigma Cart{% endblock %}
+
+{% block nav_actions %}
+{% include "nav_cart.html" %}
+{% endblock %}
+
+{% block main_class %}store-main{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <p class="mb-3"><a class="text-decoration-none product-back" href="{{ store_url|safe }}">&larr; Continue shopping</a></p>
+
+  <h1 class="mb-4 product-title">Your cart</h1>
+
+  {% if !has_items %}
+  <div class="card product-card">
+    <div class="card-body">
+      <p class="text-secondary mb-3">Your cart is empty.</p>
+      <a class="btn btn-primary" href="{{ store_url|safe }}">Browse the store</a>
+    </div>
+  </div>
+  {% else %}
+  <div class="row g-4 align-items-start">
+    <div class="col-lg-8">
+      <div class="card product-card">
+        <div class="table-responsive">
+          <table class="table align-middle mb-0">
+            <thead>
+              <tr>
+                <th scope="col">Item</th>
+                <th scope="col" class="text-end">Unit price</th>
+                <th scope="col" class="text-center">Qty</th>
+                <th scope="col" class="text-end">Total</th>
+                <th scope="col"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for line in lines %}
+              <tr>
+                <td>
+                  <span class="fw-semibold">{{ line.name }}</span>
+                  <div class="text-secondary small"><code class="product-sku">{{ line.sku_code }}</code></div>
+                  {% if !line.priced %}
+                  <div class="text-warning small">Price unavailable</div>
+                  {% endif %}
+                </td>
+                <td class="text-end">{{ line.unit_price_display }}</td>
+                <td class="text-center">
+                  <div class="d-inline-flex align-items-center gap-1">
+                    <form method="post" action="/lines/{{ line.line_id }}/decrement" class="mb-0">
+                      <button type="submit" class="btn btn-sm btn-outline-light" aria-label="Decrease quantity">&minus;</button>
+                    </form>
+                    <span class="px-2">{{ line.quantity }}</span>
+                    <form method="post" action="/lines/{{ line.line_id }}/increment" class="mb-0">
+                      <button type="submit" class="btn btn-sm btn-outline-light" aria-label="Increase quantity">+</button>
+                    </form>
+                  </div>
+                </td>
+                <td class="text-end fw-semibold">{{ line.line_total_display }}</td>
+                <td class="text-end">
+                  <form method="post" action="/lines/{{ line.line_id }}/remove" class="mb-0">
+                    <button type="submit" class="btn btn-sm btn-outline-light" aria-label="Remove {{ line.name }}">Remove</button>
+                  </form>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-4">
+      <div
+        id="product-order"
+        class="card product-card"
+        data-identity-base="{{ identity_base_url|safe }}"
+        data-sign-in-url="{{ sign_in_url|safe }}"
+      >
+        <div class="card-body">
+          <h2 class="h5 mb-3">Reservation summary</h2>
+          <dl class="row product-order-summary mb-4">
+            <dt class="col-7 text-secondary">Subtotal</dt>
+            <dd class="col-5 text-end fw-semibold">{{ subtotal_display }}</dd>
+            <dt class="col-7 text-secondary">Deposit due now (50%)</dt>
+            <dd class="col-5 text-end fs-5 fw-semibold product-price">{{ deposit_display }}</dd>
+          </dl>
+
+          {% if !has_priced_items %}
+          <p class="text-secondary small mb-0">Add a priced build to your cart to reserve it.</p>
+          {% else %}
+          <div id="product-order-auth-pending" class="product-order-status text-secondary">
+            Checking sign-in status…
+          </div>
+
+          <div id="product-order-form-wrap" class="d-none">
+            <p class="text-secondary small mb-3">
+              A 50% deposit reserves your build. Sigma Tactical Group will contact you to arrange
+              payment and delivery.
+            </p>
+            <form method="post" action="/reserve">
+              <input type="hidden" id="product-order-username" name="username" value="" />
+              <button type="submit" class="btn btn-primary w-100">Reserve — pay {{ deposit_display }} deposit</button>
+            </form>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/static/js/product-order.js"></script>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,8 +1,11 @@
 # sigma-cart
 
-Shopping cart service for Sigma Tactical Group. Stores carts locally, pulls catalog SKUs and identity users from upstream services, with a server-rendered web UI and JSON API.
+Public shopping cart service for Sigma Tactical Group. It owns the customer-facing cart UI that storefronts (e.g. [sigma-store](https://github.com/sigmatactical-org/store)) add items to, plus an internal admin UI and JSON API. Carts are stored locally; catalog SKUs come from [sigma-catalog](https://github.com/sigmatactical-org/catalog), prices from the store, and users from identity.
 
-**Internal / admin tool** — not customer-facing. The public storefront is [sigma-store](https://github.com/sigmatactical-org/store); this service is reached only through the [sigma-identity](https://github.com/sigmatactical-org/identity) authenticated proxy.
+## Public vs internal
+
+- **Public** (`cart.sigmatactical.store`): `GET /` (the shopper's cart), `POST /add`, the line quantity/remove actions, and `POST /reserve` (pay the 50% deposit to reserve). No admin data is rendered on these pages.
+- **Internal / admin only**: `GET /admin` and the `/admin/carts/*` CRUD pages, plus the JSON API. These are not linked from the public pages and are intended to be reached only through the [sigma-identity](https://github.com/sigmatactical-org/identity) authenticated proxy in production.
 
 Repository: https://github.com/sigmatactical-org/cart
 
@@ -10,10 +13,13 @@ Shared site chrome comes from [sigma-theme](https://github.com/sigmatactical-org
 
 ## Features
 
+- **Public cart UI** — line items with quantity steppers, remove, live totals, and a 50%-deposit reserve flow gated by identity sign-in
+- **Add to cart** — `POST /add` accepts a catalog `sku_id` from any storefront; a guest cart is created on first add and tracked by a shared `sigma_cart` cookie
 - **Catalog integration** — validate and enrich line items from [sigma-catalog](https://github.com/sigmatactical-org/catalog)
+- **Pricing** — resolves authoritative unit prices from the store's `/items` feed (prices live on store listings, not the catalog)
+- **Reservations** — paying the deposit records a reservation and marks the cart reserved
 - **Identity integration** — assign carts to users via Keycloak Admin API (same realm as [sigma-identity](https://github.com/sigmatactical-org/identity))
-- **Web UI** — browse carts, edit details, add and remove line items
-- **JSON API** — programmatic CRUD for integration behind sigma-identity
+- **Admin web UI + JSON API** — browse/edit carts behind sigma-identity
 
 ## Configuration
 
@@ -22,6 +28,12 @@ Shared site chrome comes from [sigma-theme](https://github.com/sigmatactical-org
 | `PORT` | Listen port (default `8080`) |
 | `DATABASE_URL` | PostgreSQL connection URL (default `postgres://sigma:sigma@127.0.0.1:5432/sigma`) |
 | `CART_CATALOG_BASE_URL` | Catalog service base URL (e.g. `http://127.0.0.1:8081/`) |
+| `CART_STORE_BASE_URL` | Store service base URL for authoritative listing prices (e.g. `http://127.0.0.1:8082/`) |
+| `CART_PUBLIC_BASE_URL` | Canonical public URL of this cart, for sign-in return links (default `http://127.0.0.1:8084/`) |
+| `CART_IDENTITY_PUBLIC_URL` | Public identity BFF base URL for the reserve sign-in gate (default `http://127.0.0.1:3000/`) |
+| `CART_CONTACT_PUBLIC_URL` | Public contact service URL for the navbar link (default `http://127.0.0.1:8083/`) |
+| `CART_STORE_PUBLIC_URL` | Public store URL for the navbar "Keep shopping" link (default `http://127.0.0.1:8082/`) |
+| `CART_COOKIE_DOMAIN` | Cookie `Domain` so the `sigma_cart` cookie is shared with the storefront across sibling subdomains; leave blank in local dev |
 | `CART_IDENTITY_ISSUER_URL` | OIDC issuer / realm URL (e.g. `http://127.0.0.1:8101/realms/multcorp`) |
 | `CART_IDENTITY_CLIENT_ID` | Service-account client id for Admin API |
 | `CART_IDENTITY_CLIENT_SECRET` | Service-account client secret |
@@ -37,7 +49,22 @@ Each cart has:
 - optional `note`
 - `lines` — `[{ "sku_id", "quantity" }, …]` (only editable when status is `open`)
 
-## API
+Reserving a cart records a **reservation** (customer, line snapshot with unit/line prices, and the 50% deposit) and flips the cart to `submitted`.
+
+## Public routes
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | The shopper's cart (guest cart via the `sigma_cart` cookie) |
+| `POST` | `/add` | Add a catalog `sku_id` (form field); creates a guest cart on first add |
+| `POST` | `/lines/{line_id}/increment` | Increase quantity |
+| `POST` | `/lines/{line_id}/decrement` | Decrease quantity (removes at 0) |
+| `POST` | `/lines/{line_id}/remove` | Remove the line |
+| `POST` | `/reserve` | Reserve by paying the 50% deposit (requires identity sign-in) |
+
+## Admin + JSON API
+
+The admin web UI is mounted under `/admin`. The JSON API (reached through sigma-identity) is unchanged:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -88,13 +115,13 @@ Standalone clone:
 cargo run -p sigma-cart
 ```
 
-Under the sigma workspace (`sigma/commerce/cart`):
+Under the sigma workspace (`sigma/it/commerce/cart`):
 
 ```bash
-cd sigma/commerce/cart && ./scripts/prepare-local.sh && cargo run -p sigma-cart
+cd sigma/it/commerce/cart && ./scripts/prepare-local.sh && cargo run -p sigma-cart
 # or prepare all commerce services:
-(cd sigma/commerce && ./scripts/prepare-local.sh)
-(cd sigma/commerce && cargo run -p sigma-cart)
+(cd sigma/it/commerce && ./scripts/prepare-local.sh)
+(cd sigma/it/commerce && cargo run -p sigma-cart)
 ```
 
 Open http://localhost:8080
@@ -103,10 +130,14 @@ Example local integration:
 
 ```bash
 export CART_CATALOG_BASE_URL=http://127.0.0.1:8081/
+export CART_STORE_BASE_URL=http://127.0.0.1:8082/
+export CART_STORE_PUBLIC_URL=http://127.0.0.1:8082/
+export CART_PUBLIC_BASE_URL=http://127.0.0.1:8084/
+export CART_IDENTITY_PUBLIC_URL=http://127.0.0.1:3000/
 export CART_IDENTITY_ISSUER_URL=http://127.0.0.1:8101/realms/multcorp
 export CART_IDENTITY_CLIENT_ID=identity
 export CART_IDENTITY_CLIENT_SECRET=8d476311-2577-4104-b9e4-7dc2cc381be8
-cargo run -p sigma-cart
+PORT=8084 cargo run -p sigma-cart
 ```
 
 ## Docker

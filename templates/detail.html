@@ -15,7 +15,7 @@
         User: {{ user_display }} · Status: {{ status_label }} · Updated {{ cart.updated_at }}
       </p>
     </div>
-    <a class="btn btn-outline-secondary" href="/">Back to list</a>
+    <a class="btn btn-outline-secondary" href="/admin">Back to list</a>
   </div>
 
   {% if let Some(err) = error %}
@@ -24,7 +24,7 @@
 
   <section class="mb-5">
     <h2 class="h4">Details</h2>
-    <form method="post" action="/carts/{{ cart.id }}/edit" class="col-lg-8">
+    <form method="post" action="/admin/carts/{{ cart.id }}/edit" class="col-lg-8">
       <div class="mb-3">
         <label for="user_id" class="form-label">User</label>
         {% if identity_users.is_empty() %}
@@ -77,7 +77,7 @@
             <td>{{ row.quantity }}</td>
             <td>
               {% if cart_open %}
-              <form method="post" action="/carts/{{ cart.id }}/lines/{{ row.line_id }}/delete" class="d-inline" onsubmit="return confirm('Remove this line?');">
+              <form method="post" action="/admin/carts/{{ cart.id }}/lines/{{ row.line_id }}/delete" class="d-inline" onsubmit="return confirm('Remove this line?');">
                 <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
               </form>
               {% endif %}
@@ -93,7 +93,7 @@
   {% if cart_open %}
   <section class="mb-4">
     <h2 class="h5">Add line item</h2>
-    <form method="post" action="/carts/{{ cart.id }}/lines" class="col-lg-8">
+    <form method="post" action="/admin/carts/{{ cart.id }}/lines" class="col-lg-8">
       <div class="mb-3">
         <label for="sku_id" class="form-label">Catalog SKU</label>
         {% if catalog_skus.is_empty() %}
@@ -117,7 +117,7 @@
   {% endif %}
 
   <section class="mt-4">
-    <form method="post" action="/carts/{{ cart.id }}/delete" onsubmit="return confirm('Delete this cart?');">
+    <form method="post" action="/admin/carts/{{ cart.id }}/delete" onsubmit="return confirm('Delete this cart?');">
       <button type="submit" class="btn btn-outline-danger">Delete cart</button>
     </form>
   </section>

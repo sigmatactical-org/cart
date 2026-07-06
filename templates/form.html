@@ -15,7 +15,7 @@
   <div class="alert alert-danger" role="alert">{{ err }}</div>
   {% endif %}
 
-  <form method="post" action="{% if let Some(c) = cart.as_ref() %}/carts/{{ c.id }}/edit{% else %}/carts{% endif %}" class="col-lg-8">
+  <form method="post" action="{% if let Some(c) = cart.as_ref() %}/admin/carts/{{ c.id }}/edit{% else %}/admin/carts{% endif %}" class="col-lg-8">
     <div class="mb-3">
       <label for="user_id" class="form-label">User</label>
       {% if identity_users.is_empty() %}
@@ -48,7 +48,7 @@
     </div>
     <div class="d-flex gap-2">
       <button type="submit" class="btn btn-primary">Save</button>
-      <a class="btn btn-outline-secondary" href="/">Cancel</a>
+      <a class="btn btn-outline-secondary" href="/admin">Cancel</a>
     </div>
   </form>
 </div>

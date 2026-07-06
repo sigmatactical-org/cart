@@ -1,9 +1,197 @@
 use askama::Template;
 
+use crate::auth_links;
 use crate::catalog::CatalogSku;
 use crate::identity::IdentityUser;
-use crate::model::{Cart, CartStatus, status_label};
+use crate::model::{
+    Cart, CartStatus, Reservation, deposit_cents_for_price, format_price_cents, status_label,
+};
+use crate::storefront::PriceBook;
 use sigma_theme::copyright_years;
+
+/// Public shopping cart view: line items, quantity steppers, totals, and the
+/// "pay deposit to reserve" action.
+#[derive(Template)]
+#[template(path = "storefront_cart.html")]
+struct StorefrontCartTemplate {
+    lines: Vec<PublicLineRow>,
+    has_items: bool,
+    has_priced_items: bool,
+    subtotal_display: String,
+    deposit_display: String,
+    cart_count: u32,
+    sign_in_url: String,
+    logout_url: String,
+    identity_base_url: String,
+    contact_us_url: String,
+    edit_profile_url: String,
+    store_url: String,
+    copyright_years: String,
+}
+
+/// Confirmation page shown after a shopper reserves by paying the deposit.
+#[derive(Template)]
+#[template(path = "reserved.html")]
+struct ReservedTemplate {
+    reservation_id: String,
+    username: String,
+    lines: Vec<ReservedLineRow>,
+    subtotal_display: String,
+    deposit_display: String,
+    cart_count: u32,
+    sign_in_url: String,
+    logout_url: String,
+    identity_base_url: String,
+    contact_us_url: String,
+    edit_profile_url: String,
+    store_url: String,
+    copyright_years: String,
+}
+
+/// A resolved, priced line for the public cart view.
+pub struct PublicLineRow {
+    pub line_id: String,
+    pub sku_code: String,
+    pub name: String,
+    pub quantity: u32,
+    pub unit_price_display: String,
+    pub line_total_display: String,
+    pub priced: bool,
+}
+
+pub struct ReservedLineRow {
+    pub sku_code: String,
+    pub name: String,
+    pub quantity: u32,
+    pub line_total_display: String,
+}
+
+/// A cart line joined with its catalog SKU and store price.
+pub struct PricedLine {
+    pub line_id: String,
+    pub sku_id: String,
+    pub sku_code: String,
+    pub name: String,
+    pub quantity: u32,
+    pub unit_price_cents: u64,
+}
+
+/// Join cart lines with catalog SKUs and store prices. Lines without a known
+/// price are still returned (so shoppers can see/remove them) but flagged.
+#[must_use]
+pub fn priced_lines(cart: &Cart, skus: &[CatalogSku], prices: &PriceBook) -> Vec<PricedLine> {
+    cart.lines
+        .iter()
+        .map(|line| {
+            let sku = skus.iter().find(|s| s.id == line.sku_id);
+            let (sku_code, name) = match sku {
+                Some(s) => (s.sku_code.clone(), s.name.clone()),
+                None => (line.sku_id.clone(), "—".to_string()),
+            };
+            PricedLine {
+                line_id: line.id.clone(),
+                sku_id: line.sku_id.clone(),
+                sku_code,
+                name,
+                quantity: line.quantity,
+                unit_price_cents: prices.unit_price_cents(&line.sku_id).unwrap_or(0),
+            }
+        })
+        .collect()
+}
+
+/// # Errors
+///
+/// Returns [`askama::Error`] when template rendering fails.
+pub fn render_storefront_cart_html(
+    cart: Option<&Cart>,
+    skus: &[CatalogSku],
+    prices: &PriceBook,
+) -> Result<String, askama::Error> {
+    let priced: Vec<PricedLine> = cart
+        .map(|c| priced_lines(c, skus, prices))
+        .unwrap_or_default();
+    let cart_count: u32 = priced.iter().map(|l| l.quantity).sum();
+    let subtotal_cents: u64 = priced
+        .iter()
+        .map(|l| l.unit_price_cents * u64::from(l.quantity))
+        .sum();
+    let has_priced_items = priced.iter().any(|l| l.unit_price_cents > 0);
+    let lines: Vec<PublicLineRow> = priced
+        .into_iter()
+        .map(|l| {
+            let line_total_cents = l.unit_price_cents * u64::from(l.quantity);
+            let priced = l.unit_price_cents > 0;
+            PublicLineRow {
+                line_id: l.line_id,
+                sku_code: l.sku_code,
+                name: l.name,
+                quantity: l.quantity,
+                unit_price_display: if priced {
+                    format_price_cents(l.unit_price_cents)
+                } else {
+                    "—".to_string()
+                },
+                line_total_display: if priced {
+                    format_price_cents(line_total_cents)
+                } else {
+                    "—".to_string()
+                },
+                priced,
+            }
+        })
+        .collect();
+    let auth = auth_links::auth_links_for_return_path("/");
+    StorefrontCartTemplate {
+        has_items: !lines.is_empty(),
+        has_priced_items,
+        lines,
+        subtotal_display: format_price_cents(subtotal_cents),
+        deposit_display: format_price_cents(deposit_cents_for_price(subtotal_cents)),
+        cart_count,
+        sign_in_url: auth.sign_in_url,
+        logout_url: auth.logout_url,
+        identity_base_url: auth.identity_base_url,
+        contact_us_url: auth.contact_us_url,
+        edit_profile_url: auth.edit_profile_url,
+        store_url: auth.store_url,
+        copyright_years: copyright_years(),
+    }
+    .render()
+}
+
+/// # Errors
+///
+/// Returns [`askama::Error`] when template rendering fails.
+pub fn render_reserved_html(reservation: &Reservation) -> Result<String, askama::Error> {
+    let lines: Vec<ReservedLineRow> = reservation
+        .lines
+        .iter()
+        .map(|l| ReservedLineRow {
+            sku_code: l.sku_code.clone(),
+            name: l.name.clone(),
+            quantity: l.quantity,
+            line_total_display: format_price_cents(l.line_total_cents),
+        })
+        .collect();
+    let auth = auth_links::auth_links_for_return_path("/");
+    ReservedTemplate {
+        reservation_id: reservation.id.clone(),
+        username: reservation.username.clone(),
+        lines,
+        subtotal_display: format_price_cents(reservation.subtotal_cents),
+        deposit_display: format_price_cents(reservation.deposit_cents),
+        cart_count: 0,
+        sign_in_url: auth.sign_in_url,
+        logout_url: auth.logout_url,
+        identity_base_url: auth.identity_base_url,
+        contact_us_url: auth.contact_us_url,
+        edit_profile_url: auth.edit_profile_url,
+        store_url: auth.store_url,
+        copyright_years: copyright_years(),
+    }
+    .render()
+}
 
 #[derive(Template)]
 #[template(path = "index.html")]

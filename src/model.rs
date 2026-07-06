@@ -176,6 +176,96 @@ pub fn status_label(status: CartStatus) -> &'static str {
     }
 }
 
+/// Deposit required to reserve a build (50% of the list price).
+#[must_use]
+pub fn deposit_cents_for_price(price_cents: u64) -> u64 {
+    price_cents / 2
+}
+
+/// Render a cents amount as a US dollar string, e.g. `175000` -> `$1,750.00`.
+#[must_use]
+pub fn format_price_cents(cents: u64) -> String {
+    format!("${}.{:02}", group_thousands(cents / 100), cents % 100)
+}
+
+fn group_thousands(dollars: u64) -> String {
+    let digits = dollars.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, ch) in digits.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    grouped.chars().rev().collect()
+}
+
+/// A single line captured on a reservation at reserve time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReservationLine {
+    pub sku_id: String,
+    pub sku_code: String,
+    pub name: String,
+    pub quantity: u32,
+    pub unit_price_cents: u64,
+    pub line_total_cents: u64,
+    pub deposit_cents: u64,
+}
+
+/// A reservation created when a shopper pays the deposit to reserve their build.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reservation {
+    pub id: String,
+    pub cart_id: String,
+    pub username: String,
+    pub lines: Vec<ReservationLine>,
+    pub subtotal_cents: u64,
+    pub deposit_cents: u64,
+    pub created_at: String,
+}
+
+/// A priced line to persist onto a reservation.
+#[derive(Debug, Clone)]
+pub struct CreateReservationLine {
+    pub sku_id: String,
+    pub sku_code: String,
+    pub name: String,
+    pub quantity: u32,
+    pub unit_price_cents: u64,
+}
+
+impl Reservation {
+    #[must_use]
+    pub fn new(cart_id: &str, username: &str, lines: Vec<CreateReservationLine>) -> Self {
+        let lines: Vec<ReservationLine> = lines
+            .into_iter()
+            .map(|line| {
+                let line_total_cents = line.unit_price_cents * u64::from(line.quantity);
+                ReservationLine {
+                    sku_id: line.sku_id,
+                    sku_code: line.sku_code,
+                    name: line.name,
+                    quantity: line.quantity,
+                    unit_price_cents: line.unit_price_cents,
+                    line_total_cents,
+                    deposit_cents: deposit_cents_for_price(line_total_cents),
+                }
+            })
+            .collect();
+        let subtotal_cents = lines.iter().map(|l| l.line_total_cents).sum();
+        let deposit_cents = deposit_cents_for_price(subtotal_cents);
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            cart_id: cart_id.to_string(),
+            username: username.trim().to_string(),
+            lines,
+            subtotal_cents,
+            deposit_cents,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

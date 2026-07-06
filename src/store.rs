@@ -1,7 +1,9 @@
 use sqlx::PgPool;
 use thiserror::Error;
 
-use crate::model::{Cart, CartLine, CartStatus, CreateCart, CreateLine, UpdateCart, UpdateLine};
+use crate::model::{
+    Cart, CartLine, CartStatus, CreateCart, CreateLine, Reservation, UpdateCart, UpdateLine,
+};
 
 const SCHEMA: &str = "cart";
 
@@ -28,6 +30,8 @@ pub enum StoreError {
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct Database {
     carts: Vec<Cart>,
+    #[serde(default)]
+    reservations: Vec<Reservation>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +175,38 @@ impl CartStore {
         cart.lines.remove(index);
         cart.updated_at = chrono::Utc::now().to_rfc3339();
         self.persist().await
+    }
+
+    /// Set a cart's status (used to mark a cart reserved/submitted at checkout).
+    pub async fn set_status(
+        &mut self,
+        cart_id: &str,
+        status: CartStatus,
+    ) -> Result<(), StoreError> {
+        let cart = self
+            .db
+            .carts
+            .iter_mut()
+            .find(|c| c.id == cart_id)
+            .ok_or(StoreError::CartNotFound)?;
+        cart.status = status;
+        cart.updated_at = chrono::Utc::now().to_rfc3339();
+        self.persist().await
+    }
+
+    /// Record a reservation created when a shopper pays a deposit.
+    pub async fn create_reservation(
+        &mut self,
+        reservation: Reservation,
+    ) -> Result<Reservation, StoreError> {
+        self.db.reservations.push(reservation.clone());
+        self.persist().await?;
+        Ok(reservation)
+    }
+
+    #[must_use]
+    pub fn get_reservation(&self, id: &str) -> Option<Reservation> {
+        self.db.reservations.iter().find(|r| r.id == id).cloned()
     }
 
     fn validate_line_input(&self, input: &CreateLine) -> Result<(), StoreError> {

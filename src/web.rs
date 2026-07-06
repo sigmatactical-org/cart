@@ -8,7 +8,7 @@ use crate::SharedStore;
 use crate::catalog;
 use crate::identity;
 use crate::model::{
-    CartStatus, CartForm, CreateLine, CreateReservationLine, LineForm, Reservation, UpdateLine,
+    CartForm, CartStatus, CreateLine, CreateReservationLine, LineForm, Reservation, UpdateLine,
 };
 use crate::store::StoreError;
 use crate::storefront;
@@ -287,7 +287,10 @@ fn reserve(
                 let html = templates::render_reserved_html(&reservation)
                     .map_err(|_| warp::reject::not_found())?;
                 let reply = warp::reply::html(html);
-                Ok(warp::reply::with_header(reply, SET_COOKIE, clear_cart_cookie()).into_response())
+                Ok(
+                    warp::reply::with_header(reply, SET_COOKIE, clear_cart_cookie())
+                        .into_response(),
+                )
             },
         )
 }

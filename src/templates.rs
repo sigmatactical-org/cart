@@ -7,9 +7,45 @@ use crate::model::{
     Cart, CartStatus, Reservation, deposit_cents_for_price, format_price_cents, status_label,
 };
 use crate::storefront::PriceBook;
-use sigma_cart_nav::render_cart_nav;
-use sigma_identity_nav::{auth_links, render_auth_nav};
+use sigma_identity_nav::{auth_links, render_app_site_nav};
 use sigma_theme::copyright_years;
+
+fn keep_shopping_link(store_url: &str) -> String {
+    format!(
+        r#"<a class="btn btn-outline-light btn-sm" href="{store_url}">Keep shopping</a>"#
+    )
+}
+
+fn site_nav(
+    return_path: &str,
+    cart_count: u32,
+    show_contact_us: bool,
+    leading_html: &str,
+) -> Result<String, askama::Error> {
+    render_app_site_nav(
+        &config::identity_public_base_url(),
+        &config::public_base_url(),
+        &config::contact_public_base_url(),
+        "/",
+        cart_count,
+        return_path,
+        show_contact_us,
+        leading_html,
+    )
+}
+
+fn storefront_site_nav(cart_count: u32) -> Result<String, askama::Error> {
+    site_nav(
+        "/",
+        cart_count,
+        true,
+        &keep_shopping_link(&config::store_public_base_url()),
+    )
+}
+
+fn admin_site_nav(return_path: &str) -> Result<String, askama::Error> {
+    site_nav(return_path, 0, true, "")
+}
 
 /// Public shopping cart view: line items, quantity steppers, totals, and the
 /// "pay deposit to reserve" action.
@@ -21,11 +57,9 @@ struct StorefrontCartTemplate {
     has_priced_items: bool,
     subtotal_display: String,
     deposit_display: String,
-    cart_nav: String,
-    auth_nav: String,
+    site_nav: String,
     sign_in_url: String,
     identity_base_url: String,
-    contact_us_url: String,
     store_url: String,
     copyright_years: String,
 }
@@ -39,9 +73,7 @@ struct ReservedTemplate {
     lines: Vec<ReservedLineRow>,
     subtotal_display: String,
     deposit_display: String,
-    cart_nav: String,
-    auth_nav: String,
-    contact_us_url: String,
+    site_nav: String,
     store_url: String,
     copyright_years: String,
 }
@@ -51,6 +83,7 @@ pub struct PublicLineRow {
     pub line_id: String,
     pub sku_code: String,
     pub name: String,
+    pub product_url: String,
     pub quantity: u32,
     pub unit_price_display: String,
     pub line_total_display: String,
@@ -60,6 +93,7 @@ pub struct PublicLineRow {
 pub struct ReservedLineRow {
     pub sku_code: String,
     pub name: String,
+    pub product_url: String,
     pub quantity: u32,
     pub line_total_display: String,
 }
@@ -72,6 +106,7 @@ pub struct PricedLine {
     pub name: String,
     pub quantity: u32,
     pub unit_price_cents: u64,
+    pub in_catalog: bool,
 }
 
 /// Join cart lines with catalog SKUs and store prices. Lines without a known
@@ -82,9 +117,9 @@ pub fn priced_lines(cart: &Cart, skus: &[CatalogSku], prices: &PriceBook) -> Vec
         .iter()
         .map(|line| {
             let sku = skus.iter().find(|s| s.id == line.sku_id);
-            let (sku_code, name) = match sku {
-                Some(s) => (s.sku_code.clone(), s.name.clone()),
-                None => (line.sku_id.clone(), "—".to_string()),
+            let (sku_code, name, in_catalog) = match sku {
+                Some(s) => (s.sku_code.clone(), s.name.clone(), true),
+                None => (line.sku_id.clone(), "—".to_string(), false),
             };
             PricedLine {
                 line_id: line.id.clone(),
@@ -93,6 +128,7 @@ pub fn priced_lines(cart: &Cart, skus: &[CatalogSku], prices: &PriceBook) -> Vec
                 name,
                 quantity: line.quantity,
                 unit_price_cents: prices.unit_price_cents(&line.sku_id).unwrap_or(0),
+                in_catalog,
             }
         })
         .collect()
@@ -122,8 +158,12 @@ pub fn render_storefront_cart_html(
             let priced = l.unit_price_cents > 0;
             PublicLineRow {
                 line_id: l.line_id,
-                sku_code: l.sku_code,
+                sku_code: l.sku_code.clone(),
                 name: l.name,
+                product_url: l
+                    .in_catalog
+                    .then(|| config::store_product_url(&l.sku_code))
+                    .unwrap_or_default(),
                 quantity: l.quantity,
                 unit_price_display: if priced {
                     format_price_cents(l.unit_price_cents)
@@ -151,11 +191,9 @@ pub fn render_storefront_cart_html(
         lines,
         subtotal_display: format_price_cents(subtotal_cents),
         deposit_display: format_price_cents(deposit_cents_for_price(subtotal_cents)),
-        cart_nav: render_cart_nav("/", cart_count)?,
-        auth_nav: render_auth_nav(&links)?,
+        site_nav: storefront_site_nav(cart_count)?,
         sign_in_url: links.sign_in_url,
         identity_base_url: links.identity_base_url,
-        contact_us_url: links.contact_us_url,
         store_url: config::store_public_base_url(),
         copyright_years: copyright_years(),
     }
@@ -172,25 +210,18 @@ pub fn render_reserved_html(reservation: &Reservation) -> Result<String, askama:
         .map(|l| ReservedLineRow {
             sku_code: l.sku_code.clone(),
             name: l.name.clone(),
+            product_url: config::store_product_url(&l.sku_code),
             quantity: l.quantity,
             line_total_display: format_price_cents(l.line_total_cents),
         })
         .collect();
-    let links = auth_links(
-        &config::identity_public_base_url(),
-        &config::public_base_url(),
-        &config::contact_public_base_url(),
-        "/",
-    );
     ReservedTemplate {
         reservation_id: reservation.id.clone(),
         username: reservation.username.clone(),
         lines,
         subtotal_display: format_price_cents(reservation.subtotal_cents),
         deposit_display: format_price_cents(reservation.deposit_cents),
-        cart_nav: render_cart_nav("/", 0)?,
-        auth_nav: render_auth_nav(&links)?,
-        contact_us_url: links.contact_us_url,
+        site_nav: storefront_site_nav(0)?,
         store_url: config::store_public_base_url(),
         copyright_years: copyright_years(),
     }
@@ -206,6 +237,7 @@ struct IndexTemplate {
     catalog_error: Option<String>,
     identity_error: Option<String>,
     message: Option<String>,
+    site_nav: String,
     copyright_years: String,
 }
 
@@ -218,6 +250,7 @@ struct FormTemplate {
     note: String,
     identity_users: Vec<UserRef>,
     error: Option<String>,
+    site_nav: String,
     copyright_years: String,
 }
 
@@ -237,6 +270,7 @@ struct DetailTemplate {
     line_quantity: String,
     cart_open: bool,
     error: Option<String>,
+    site_nav: String,
     copyright_years: String,
 }
 
@@ -383,6 +417,10 @@ fn render_form(
     error: Option<String>,
     values: CartFormValues,
 ) -> Result<String, askama::Error> {
+    let return_path = cart
+        .as_ref()
+        .map(|entry| format!("/admin/carts/{}/edit", entry.id))
+        .unwrap_or_else(|| "/admin/carts/new".to_string());
     FormTemplate {
         cart,
         user_id: values.user_id,
@@ -390,6 +428,7 @@ fn render_form(
         note: values.note,
         identity_users: user_refs(identity_users),
         error,
+        site_nav: admin_site_nav(&return_path)?,
         copyright_years: copyright_years(),
     }
     .render()
@@ -404,6 +443,7 @@ fn render_detail(
     line_values: LineFormValues,
 ) -> Result<String, askama::Error> {
     let (user_display, _) = resolve_user_display(&cart, identity_users);
+    let site_nav = admin_site_nav(&format!("/admin/carts/{}", cart.id))?;
     DetailTemplate {
         cart_open: cart.status == CartStatus::Open,
         status_label: status_label(cart.status).to_string(),
@@ -418,6 +458,7 @@ fn render_detail(
         line_quantity: line_values.quantity,
         cart,
         error,
+        site_nav,
         copyright_years: copyright_years(),
     }
     .render()
@@ -435,6 +476,7 @@ pub fn render_index_html(carts: Vec<Cart>, ctx: IndexContext<'_>) -> Result<Stri
         catalog_error: ctx.catalog_error,
         identity_error: ctx.identity_error,
         message: ctx.message,
+        site_nav: admin_site_nav("/admin")?,
         copyright_years: copyright_years(),
     }
     .render()

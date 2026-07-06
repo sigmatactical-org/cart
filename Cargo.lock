@@ -1604,7 +1604,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sigma-cart-nav",
+ "sigma-cart-nav 0.1.0",
  "sigma-identity-nav",
  "sigma-pg",
  "sigma-theme",
@@ -1623,10 +1623,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sigma-cart-nav"
+version = "0.1.0"
+source = "git+https://github.com/sigmatactical-org/cart.git#fc80eea8bcdace216d474e89016c21a0941dfb71"
+dependencies = [
+ "askama",
+]
+
+[[package]]
 name = "sigma-identity-nav"
 version = "0.1.0"
 dependencies = [
  "askama",
+ "sigma-cart-nav 0.1.0 (git+https://github.com/sigmatactical-org/cart.git)",
 ]
 
 [[package]]

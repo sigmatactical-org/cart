@@ -88,6 +88,15 @@ pub fn store_public_base_url() -> String {
         .unwrap_or_else(|| "http://127.0.0.1:8082/".to_string())
 }
 
+/// Public store URL for a product detail page (`/products/{sku_code}`).
+#[must_use]
+pub fn store_product_url(sku_code: &str) -> String {
+    format!(
+        "{}products/{sku_code}",
+        store_public_base_url().trim_end_matches('/')
+    )
+}
+
 /// Optional cookie `Domain` for the guest-cart cookie so it is shared with the
 /// storefront across sibling subdomains (e.g. `.sigmatacticalgroup.com`). Unset
 /// in local development, where all apps share `localhost`.

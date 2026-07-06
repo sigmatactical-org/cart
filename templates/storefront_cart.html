@@ -5,7 +5,7 @@
 {% block brand %}Sigma Cart{% endblock %}
 
 {% block nav_actions %}
-{% include "nav_cart.html" %}
+{{ site_nav|safe }}
 {% endblock %}
 
 {% block main_class %}store-main{% endblock %}
@@ -42,8 +42,15 @@
               {% for line in lines %}
               <tr>
                 <td>
+                  {% if line.product_url != "" %}
+                  <a class="text-decoration-none text-reset d-inline-block" href="{{ line.product_url|safe }}">
+                    <span class="fw-semibold">{{ line.name }}</span>
+                    <div class="text-secondary small"><code class="product-sku">{{ line.sku_code }}</code></div>
+                  </a>
+                  {% else %}
                   <span class="fw-semibold">{{ line.name }}</span>
                   <div class="text-secondary small"><code class="product-sku">{{ line.sku_code }}</code></div>
+                  {% endif %}
                   {% if !line.priced %}
                   <div class="text-warning small">Price unavailable</div>
                   {% endif %}

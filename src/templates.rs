@@ -70,7 +70,6 @@ struct ReservedTemplate {
     deposit_display: String,
     site_header: SiteHeader,
     site_nav: String,
-    store_url: String,
     copyright_years: String,
 }
 
@@ -223,7 +222,6 @@ pub fn render_reserved_html(order: &Order) -> Result<String, askama::Error> {
         deposit_display: format_price_cents(order.deposit_cents),
         site_header: storefront_page_header(&store_url),
         site_nav: storefront_site_nav(0)?,
-        store_url,
         copyright_years: copyright_years(),
     }
     .render()

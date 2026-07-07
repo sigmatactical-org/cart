@@ -1632,11 +1632,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sigma-contact-nav"
+version = "0.1.0"
+dependencies = [
+ "askama",
+]
+
+[[package]]
 name = "sigma-identity-nav"
 version = "0.1.0"
 dependencies = [
  "askama",
  "sigma-cart-nav 0.1.0 (git+https://github.com/sigmatactical-org/cart.git)",
+ "sigma-contact-nav",
 ]
 
 [[package]]

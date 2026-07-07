@@ -20,7 +20,11 @@ fn storefront_page_header(store_url: &str) -> SiteHeader {
         .with_breadcrumb(Breadcrumb::current("Cart"))
 }
 
-fn site_nav(return_path: &str, cart_count: u32, show_contact_us: bool) -> Result<String, askama::Error> {
+fn site_nav(
+    return_path: &str,
+    cart_count: u32,
+    show_contact_us: bool,
+) -> Result<String, askama::Error> {
     render_app_site_nav(&AppSiteNav {
         identity_base: &config::identity_public_base_url(),
         app_base: &config::public_base_url(),

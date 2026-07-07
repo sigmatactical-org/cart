@@ -2,13 +2,8 @@
 
 {% block title %}Order confirmed — Sigma Cart{% endblock %}
 
-{% block brand %}Sigma Cart{% endblock %}
 
-{% block nav_actions %}
-{{ site_nav|safe }}
-{% endblock %}
-
-{% block main_class %}store-main{% endblock %}
+{% block main_class %}store-main product-page{% endblock %}
 
 {% block content %}
 <div class="container py-4">
@@ -60,9 +55,7 @@
             <dd class="col-5 text-end fs-5 fw-semibold product-price">{{ deposit_display }}</dd>
           </dl>
 
-          <p class="text-secondary small mb-4">Order reference: <code>{{ order_id }}</code></p>
-
-          <a class="btn btn-primary" href="{{ store_url|safe }}">Continue shopping</a>
+          <p class="text-secondary small mb-0">Order reference: <code>{{ order_id }}</code></p>
         </div>
       </div>
     </div>

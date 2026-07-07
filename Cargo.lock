@@ -1634,6 +1634,7 @@ dependencies = [
 [[package]]
 name = "sigma-contact-nav"
 version = "0.1.0"
+source = "git+https://github.com/sigmatactical-org/contact.git#301970df0c5e08dd572245b9242e8d14ed536cbe"
 dependencies = [
  "askama",
 ]

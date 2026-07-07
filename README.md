@@ -32,7 +32,7 @@ Shared site chrome comes from [sigma-theme](https://github.com/sigmatactical-org
 | `CART_PUBLIC_BASE_URL` | Canonical public URL of this cart, for sign-in return links (default `http://127.0.0.1:8084/`) |
 | `CART_IDENTITY_PUBLIC_URL` | Public identity BFF base URL for the reserve sign-in gate (default `http://127.0.0.1:3000/`) |
 | `CART_CONTACT_PUBLIC_URL` | Public contact service URL for the navbar link (default `http://127.0.0.1:8083/`) |
-| `CART_STORE_PUBLIC_URL` | Public store URL for the navbar "Keep shopping" link (default `http://127.0.0.1:8082/`) |
+| `CART_STORE_PUBLIC_URL` | Public store URL for product and continue-shopping links (default `http://127.0.0.1:8082/`) |
 | `CART_ORDER_BASE_URL` | Order service base URL for checkout commit (e.g. `http://127.0.0.1:8085/`) |
 | `CART_COOKIE_DOMAIN` | Cookie `Domain` so the `sigma_cart` cookie is shared with the storefront across sibling subdomains; leave blank in local dev |
 | `CART_IDENTITY_ISSUER_URL` | OIDC issuer / realm URL (e.g. `http://127.0.0.1:8101/realms/multcorp`) |

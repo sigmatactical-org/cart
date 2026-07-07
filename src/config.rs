@@ -78,7 +78,7 @@ pub fn contact_public_base_url() -> String {
         .unwrap_or_else(|| "http://127.0.0.1:8083/".to_string())
 }
 
-/// Public base URL of the store, for the "keep shopping" navbar link.
+/// Public base URL of the store for product links and continue-shopping navigation.
 #[must_use]
 pub fn store_public_base_url() -> String {
     std::env::var("CART_STORE_PUBLIC_URL")

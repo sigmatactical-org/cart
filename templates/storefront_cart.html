@@ -2,18 +2,11 @@
 
 {% block title %}Your cart — Sigma Cart{% endblock %}
 
-{% block brand %}Sigma Cart{% endblock %}
 
-{% block nav_actions %}
-{{ site_nav|safe }}
-{% endblock %}
-
-{% block main_class %}store-main{% endblock %}
+{% block main_class %}store-main product-page{% endblock %}
 
 {% block content %}
 <div class="container py-4">
-  <p class="mb-3"><a class="text-decoration-none product-back" href="{{ store_url|safe }}">&larr; Continue shopping</a></p>
-
   <h1 class="mb-4 product-title">Your cart</h1>
 
   {% if !has_items %}

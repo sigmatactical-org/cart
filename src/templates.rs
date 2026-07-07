@@ -8,17 +8,19 @@ use crate::order::Order;
 use crate::storefront::PriceBook;
 use sigma_identity_nav::{AppSiteNav, auth_links, render_app_site_nav};
 use sigma_theme::copyright_years;
+use sigma_theme::nav::{Breadcrumb, SiteHeader};
 
-fn keep_shopping_link(store_url: &str) -> String {
-    format!(r#"<a class="btn btn-outline-light btn-sm" href="{store_url}">Keep shopping</a>"#)
+fn page_header(brand: &str) -> SiteHeader {
+    SiteHeader::new(brand)
 }
 
-fn site_nav(
-    return_path: &str,
-    cart_count: u32,
-    show_contact_us: bool,
-    leading_html: &str,
-) -> Result<String, askama::Error> {
+fn storefront_page_header(store_url: &str) -> SiteHeader {
+    page_header("Sigma Cart")
+        .with_breadcrumb(Breadcrumb::link(store_url, "Store"))
+        .with_breadcrumb(Breadcrumb::current("Cart"))
+}
+
+fn site_nav(return_path: &str, cart_count: u32, show_contact_us: bool) -> Result<String, askama::Error> {
     render_app_site_nav(&AppSiteNav {
         identity_base: &config::identity_public_base_url(),
         app_base: &config::public_base_url(),
@@ -27,21 +29,16 @@ fn site_nav(
         cart_count,
         return_path,
         show_contact_us,
-        leading_html,
+        leading_html: "",
     })
 }
 
 fn storefront_site_nav(cart_count: u32) -> Result<String, askama::Error> {
-    site_nav(
-        "/",
-        cart_count,
-        true,
-        &keep_shopping_link(&config::store_public_base_url()),
-    )
+    site_nav("/", cart_count, true)
 }
 
 fn admin_site_nav(return_path: &str) -> Result<String, askama::Error> {
-    site_nav(return_path, 0, true, "")
+    site_nav(return_path, 0, true)
 }
 
 /// Public shopping cart view: line items, quantity steppers, totals, and the
@@ -54,6 +51,7 @@ struct StorefrontCartTemplate {
     has_priced_items: bool,
     subtotal_display: String,
     deposit_display: String,
+    site_header: SiteHeader,
     site_nav: String,
     sign_in_url: String,
     identity_base_url: String,
@@ -70,6 +68,7 @@ struct ReservedTemplate {
     lines: Vec<ReservedLineRow>,
     subtotal_display: String,
     deposit_display: String,
+    site_header: SiteHeader,
     site_nav: String,
     store_url: String,
     copyright_years: String,
@@ -183,16 +182,18 @@ pub fn render_storefront_cart_html(
         &config::contact_public_base_url(),
         "/",
     );
+    let store_url = config::store_public_base_url();
     StorefrontCartTemplate {
         has_items: !lines.is_empty(),
         has_priced_items,
         lines,
         subtotal_display: format_price_cents(subtotal_cents),
         deposit_display: format_price_cents(deposit_cents_for_price(subtotal_cents)),
+        site_header: storefront_page_header(&store_url),
         site_nav: storefront_site_nav(cart_count)?,
         sign_in_url: links.sign_in_url,
         identity_base_url: links.identity_base_url,
-        store_url: config::store_public_base_url(),
+        store_url,
         copyright_years: copyright_years(),
     }
     .render()
@@ -213,14 +214,16 @@ pub fn render_reserved_html(order: &Order) -> Result<String, askama::Error> {
             line_total_display: format_price_cents(l.line_total_cents),
         })
         .collect();
+    let store_url = config::store_public_base_url();
     ReservedTemplate {
         order_id: order.id.clone(),
         username: order.username.clone(),
         lines,
         subtotal_display: format_price_cents(order.subtotal_cents),
         deposit_display: format_price_cents(order.deposit_cents),
+        site_header: storefront_page_header(&store_url),
         site_nav: storefront_site_nav(0)?,
-        store_url: config::store_public_base_url(),
+        store_url,
         copyright_years: copyright_years(),
     }
     .render()
@@ -235,6 +238,7 @@ struct IndexTemplate {
     catalog_error: Option<String>,
     identity_error: Option<String>,
     message: Option<String>,
+    site_header: SiteHeader,
     site_nav: String,
     copyright_years: String,
 }
@@ -248,6 +252,7 @@ struct FormTemplate {
     note: String,
     identity_users: Vec<UserRef>,
     error: Option<String>,
+    site_header: SiteHeader,
     site_nav: String,
     copyright_years: String,
 }
@@ -268,6 +273,7 @@ struct DetailTemplate {
     line_quantity: String,
     cart_open: bool,
     error: Option<String>,
+    site_header: SiteHeader,
     site_nav: String,
     copyright_years: String,
 }
@@ -426,6 +432,7 @@ fn render_form(
         note: values.note,
         identity_users: user_refs(identity_users),
         error,
+        site_header: page_header("Sigma Cart"),
         site_nav: admin_site_nav(&return_path)?,
         copyright_years: copyright_years(),
     }
@@ -457,6 +464,7 @@ fn render_detail(
         cart,
         error,
         site_nav,
+        site_header: page_header("Sigma Cart"),
         copyright_years: copyright_years(),
     }
     .render()
@@ -474,6 +482,7 @@ pub fn render_index_html(carts: Vec<Cart>, ctx: IndexContext<'_>) -> Result<Stri
         catalog_error: ctx.catalog_error,
         identity_error: ctx.identity_error,
         message: ctx.message,
+        site_header: page_header("Sigma Cart"),
         site_nav: admin_site_nav("/admin")?,
         copyright_years: copyright_years(),
     }

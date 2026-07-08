@@ -6,7 +6,8 @@ use crate::identity::IdentityUser;
 use crate::model::{Cart, CartStatus, deposit_cents_for_price, format_price_cents, status_label};
 use crate::order::Order;
 use crate::storefront::PriceBook;
-use sigma_identity_nav::{AppSiteNav, auth_links, render_app_site_nav};
+use sigma_identity_nav::auth_links;
+use sigma_theme::site_nav::{AppSiteNav, render_app_site_nav};
 use sigma_theme::copyright_years;
 use sigma_theme::nav::{Breadcrumb, SiteHeader};
 
@@ -32,6 +33,7 @@ fn site_nav(
         cart_url: &config::public_base_url(),
         cart_count,
         return_path,
+        show_cart: true,
         show_contact_us,
         leading_html: "",
     })
@@ -182,7 +184,6 @@ pub fn render_storefront_cart_html(
     let links = auth_links(
         &config::identity_public_base_url(),
         &config::public_base_url(),
-        &config::contact_public_base_url(),
         "/",
     );
     let store_url = config::store_public_base_url();

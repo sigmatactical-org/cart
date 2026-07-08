@@ -134,19 +134,23 @@ impl CartStore {
         }
         let line = CartLine::new(input);
         let now = parse_ts(&line.updated_at)?;
-        sqlx::query(
+        let row = sqlx::query(
             "INSERT INTO cart.cart_lines (id, cart_id, sku_id, quantity, updated_at) \
-             VALUES ($1, $2, $3, $4, $5)",
+             VALUES ($1, $2, $3, $4, $5) \
+             ON CONFLICT (cart_id, sku_id) DO UPDATE SET \
+               quantity = cart.cart_lines.quantity + EXCLUDED.quantity, \
+               updated_at = EXCLUDED.updated_at \
+             RETURNING id, cart_id, sku_id, quantity, updated_at",
         )
         .bind(&line.id)
         .bind(cart_id)
         .bind(&line.sku_id)
         .bind(line.quantity as i32)
         .bind(now)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await?;
         touch_cart(cart_id, &self.pool).await?;
-        Ok(line)
+        row_to_line(row)
     }
 
     pub async fn update_line(

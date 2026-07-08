@@ -52,8 +52,12 @@ fn cart_id_from_cookie(cookie_header: Option<&str>) -> Option<String> {
 }
 
 fn set_cart_cookie(cart_id: &str) -> String {
-    let mut cookie =
-        format!("{CART_COOKIE}={cart_id}; Path=/; Max-Age={CART_COOKIE_MAX_AGE}; SameSite=Lax");
+    let mut cookie = format!(
+        "{CART_COOKIE}={cart_id}; Path=/; HttpOnly; Max-Age={CART_COOKIE_MAX_AGE}; SameSite=Lax"
+    );
+    if crate::config::public_base_url().starts_with("https://") {
+        cookie.push_str("; Secure");
+    }
     if let Some(domain) = crate::config::cookie_domain() {
         cookie.push_str(&format!("; Domain={domain}"));
     }
@@ -61,7 +65,10 @@ fn set_cart_cookie(cart_id: &str) -> String {
 }
 
 fn clear_cart_cookie() -> String {
-    let mut cookie = format!("{CART_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax");
+    let mut cookie = format!("{CART_COOKIE}=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax");
+    if crate::config::public_base_url().starts_with("https://") {
+        cookie.push_str("; Secure");
+    }
     if let Some(domain) = crate::config::cookie_domain() {
         cookie.push_str(&format!("; Domain={domain}"));
     }

@@ -81,6 +81,7 @@ mod tests {
     use warp::http::StatusCode;
 
     async fn test_store() -> store::CartStore {
+        sigma_pg::clients::internal::ensure_test_internal_token();
         store::CartStore::connect_empty()
             .await
             .expect("PostgreSQL required for tests")
@@ -114,6 +115,10 @@ mod tests {
             .method("GET")
             .path("/carts")
             .header("accept", "application/json")
+            .header(
+                "x-sigma-internal-token",
+                sigma_pg::clients::internal::TEST_INTERNAL_TOKEN,
+            )
             .reply(&routes(test_store().await))
             .await;
         assert_eq!(res.status(), StatusCode::OK);
@@ -127,6 +132,10 @@ mod tests {
             .method("POST")
             .path("/carts")
             .header("content-type", "application/json")
+            .header(
+                "x-sigma-internal-token",
+                sigma_pg::clients::internal::TEST_INTERNAL_TOKEN,
+            )
             .body(r#"{"note":"test cart"}"#)
             .reply(&routes(test_store().await))
             .await;
@@ -144,6 +153,10 @@ mod tests {
             .method("POST")
             .path("/carts")
             .header("content-type", "application/json")
+            .header(
+                "x-sigma-internal-token",
+                sigma_pg::clients::internal::TEST_INTERNAL_TOKEN,
+            )
             .body(r#"{}"#)
             .reply(&app)
             .await;
@@ -154,6 +167,10 @@ mod tests {
             .method("POST")
             .path(&format!("/carts/{cart_id}/lines"))
             .header("content-type", "application/json")
+            .header(
+                "x-sigma-internal-token",
+                sigma_pg::clients::internal::TEST_INTERNAL_TOKEN,
+            )
             .body(r#"{"sku_id":"sku-abc","quantity":2}"#)
             .reply(&app)
             .await;

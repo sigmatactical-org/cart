@@ -7,9 +7,9 @@ use crate::model::{Cart, CartStatus, deposit_cents_for_price, format_price_cents
 use crate::order::Order;
 use crate::storefront::PriceBook;
 use sigma_identity_nav::auth_links;
-use sigma_theme::site_nav::{AppSiteNav, render_app_site_nav};
 use sigma_theme::copyright_years;
 use sigma_theme::nav::{Breadcrumb, SiteHeader};
+use sigma_theme::site_nav::{AppSiteNav, render_app_site_nav};
 
 fn page_header(brand: &str) -> SiteHeader {
     SiteHeader::new(brand)

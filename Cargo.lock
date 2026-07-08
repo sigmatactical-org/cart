@@ -1604,7 +1604,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sigma-cart-nav 0.1.0",
+ "sigma-cart-nav",
  "sigma-identity-nav",
  "sigma-pg",
  "sigma-theme",
@@ -1624,17 +1624,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "sigma-cart-nav"
-version = "0.1.0"
-source = "git+https://github.com/sigmatactical-org/cart.git#e6664da9d3f6c83f4d32a4449ca767b3db4a0c73"
-dependencies = [
- "askama",
-]
-
-[[package]]
 name = "sigma-contact-nav"
 version = "0.1.0"
-source = "git+https://github.com/sigmatactical-org/contact.git#301970df0c5e08dd572245b9242e8d14ed536cbe"
 dependencies = [
  "askama",
 ]
@@ -1644,8 +1635,6 @@ name = "sigma-identity-nav"
 version = "0.1.0"
 dependencies = [
  "askama",
- "sigma-cart-nav 0.1.0 (git+https://github.com/sigmatactical-org/cart.git)",
- "sigma-contact-nav",
 ]
 
 [[package]]
@@ -1671,6 +1660,9 @@ dependencies = [
  "askama",
  "mime_guess",
  "rust-embed",
+ "sigma-cart-nav",
+ "sigma-contact-nav",
+ "sigma-identity-nav",
  "tracing",
  "warp",
 ]

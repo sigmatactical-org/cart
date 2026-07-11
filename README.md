@@ -156,11 +156,11 @@ Data is stored in the shared PostgreSQL `cart` schema (`cart.carts` and `cart.ca
 cd platform && ./scripts/postgres-dev.sh port-forward-bg && ./scripts/postgres-dev.sh migrate
 ```
 
-## Copyright & branding
+## Brand & artwork
 
 © Sigma Tactical Group. **All rights reserved.**
 
-The **Sigma Tactical Group** name, logos, wordmarks, and site visual identity are **proprietary**. Do not use them outside Sigma Tactical Group products or communications without written permission. See [sigma-theme BRANDING.md](https://github.com/sigmatactical-org/sigma-theme/blob/main/BRANDING.md).
+The Sigma Tactical Group name, logos, marks, artwork, and visual identity are **proprietary**. They are not covered by this repository's source-code license. See [BRANDING.md](BRANDING.md).
 
 ## License
 

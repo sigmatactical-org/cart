@@ -60,9 +60,9 @@ pub struct OrderLine {
     pub line_total_cents: u64,
 }
 
-/// Create a committed order in the order service.
+/// Create a committed order in the orders service.
 pub async fn create_order(input: CreateOrderRequest) -> Result<Order, OrderError> {
-    let base = crate::config::order_base_url().ok_or(OrderError::NotConfigured)?;
+    let base = crate::config::orders_base_url().ok_or(OrderError::NotConfigured)?;
     let url = format!("{}orders", base);
     let mut request = sigma_pg::clients::http::client().post(url).json(&input);
     if let Some(token) = sigma_pg::clients::internal::internal_token() {

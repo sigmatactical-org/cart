@@ -1,6 +1,7 @@
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 fn main() -> Result<(), BoxError> {
+    tracing_subscriber::fmt::init();
     let addr = sigma_cart::listen_socket_addr_from_env();
 
     tokio::runtime::Builder::new_multi_thread()

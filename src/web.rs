@@ -134,7 +134,7 @@ fn add_to_cart(
                     return Ok::<_, Rejection>(redirect_to("/", None));
                 }
                 if let Err(error) = catalog::require_active_sku(&sku_id).await {
-                    eprintln!("add_to_cart: require_active_sku({sku_id}) failed: {error:?}");
+                    tracing::error!("add_to_cart: require_active_sku({sku_id}) failed: {error:?}");
                     return Err(warp::reject::not_found());
                 }
 
@@ -152,7 +152,7 @@ fn add_to_cart(
                     }
                     _ => {
                         let cart = store.create(Default::default()).await.map_err(|error| {
-                            eprintln!("add_to_cart: store.create failed: {error:?}");
+                            tracing::error!("add_to_cart: store.create failed: {error:?}");
                             warp::reject::not_found()
                         })?;
                         set_cookie = Some(set_cart_cookie(&cart.id));
@@ -190,7 +190,7 @@ fn add_to_cart(
                         .map(|_| ()),
                 };
                 result.map_err(|error| {
-                    eprintln!("add_to_cart: line write for cart {cart_id} failed: {error:?}");
+                    tracing::error!("add_to_cart: line write for cart {cart_id} failed: {error:?}");
                     warp::reject::not_found()
                 })?;
 

@@ -262,11 +262,14 @@ fn reserve(
         .and(store)
         .and_then(|cookie: Option<String>, store: SharedStore| async move {
             let Some(session) = sigma_pg::clients::session::fetch_identity_status(
-                &crate::config::identity_public_base_url(),
+                &crate::config::identity_internal_base_url(),
                 cookie.as_deref(),
             )
             .await
-            .map_err(|_| warp::reject::not_found())?
+            .map_err(|error| {
+                tracing::error!("reserve: fetch_identity_status failed: {error:?}");
+                warp::reject::not_found()
+            })?
             else {
                 return Ok::<_, Rejection>(redirect_to("/", None));
             };

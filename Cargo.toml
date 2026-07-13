@@ -26,7 +26,7 @@ sigma-theme = { git = "https://github.com/sigmatactical-org/sigma-theme.git", de
 sigma-identity-nav = { git = "https://github.com/sigmatactical-org/identity.git", package = "sigma-identity-nav" }
 sigma-cart-nav = { path = "nav" }
 sigma-pg = { git = "https://github.com/sigmatactical-org/sigma-pg.git" }
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }
 thiserror = "2.0.17"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

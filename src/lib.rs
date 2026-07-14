@@ -1,5 +1,7 @@
 //! Sigma Cart: shopping carts backed by catalog SKUs and identity users.
 
+#![forbid(unsafe_code)]
+
 mod addresses_client;
 mod api;
 mod catalog;

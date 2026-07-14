@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 fn main() -> Result<(), BoxError> {

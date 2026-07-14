@@ -2,6 +2,8 @@
 //! linking to a cart URL. Shared across Sigma web services (store, cart, ...)
 //! so the cart affordance looks identical everywhere.
 
+#![forbid(unsafe_code)]
+
 use askama::Template;
 
 #[derive(Template)]

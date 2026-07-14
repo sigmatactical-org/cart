@@ -1,11 +1,9 @@
 mod create_order_line;
 mod create_order_request;
-mod order;
 mod order_error;
 mod order_line;
 pub use create_order_line::CreateOrderLine;
 pub use create_order_request::CreateOrderRequest;
-pub use order::Order;
 pub use order_error::OrderError;
 pub use order_line::OrderLine;
 
@@ -30,4 +28,13 @@ pub async fn create_order(input: CreateOrderRequest) -> Result<Order, OrderError
         .json()
         .await
         .map_err(|e| OrderError::Request(e.to_string()))
+}
+/// Order returned by the order service (confirmation page).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Order {
+    pub id: String,
+    pub username: String,
+    pub lines: Vec<OrderLine>,
+    pub subtotal_cents: u64,
+    pub deposit_cents: u64,
 }

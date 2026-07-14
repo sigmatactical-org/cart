@@ -1,3 +1,40 @@
+mod cart_form_values;
+mod cart_row;
+mod catalog_sku_ref;
+mod checkout_line_row;
+mod checkout_option;
+mod checkout_template;
+mod detail_template;
+mod form_template;
+mod index_context;
+mod index_template;
+mod line_form_values;
+mod line_row;
+mod priced_line;
+mod public_line_row;
+mod reserved_line_row;
+mod reserved_template;
+mod storefront_cart_template;
+mod user_ref;
+pub use cart_form_values::CartFormValues;
+pub use cart_row::CartRow;
+pub use catalog_sku_ref::CatalogSkuRef;
+pub use checkout_line_row::CheckoutLineRow;
+pub use checkout_option::CheckoutOption;
+pub(crate) use checkout_template::CheckoutTemplate;
+pub(crate) use detail_template::DetailTemplate;
+pub(crate) use form_template::FormTemplate;
+pub use index_context::IndexContext;
+pub(crate) use index_template::IndexTemplate;
+pub use line_form_values::LineFormValues;
+pub use line_row::LineRow;
+pub use priced_line::PricedLine;
+pub use public_line_row::PublicLineRow;
+pub use reserved_line_row::ReservedLineRow;
+pub(crate) use reserved_template::ReservedTemplate;
+pub(crate) use storefront_cart_template::StorefrontCartTemplate;
+pub use user_ref::UserRef;
+
 use askama::Template;
 
 use crate::catalog::CatalogSku;
@@ -52,106 +89,6 @@ fn storefront_site_nav(cart_count: u32) -> Result<String, askama::Error> {
 
 fn admin_site_nav(return_path: &str) -> Result<String, askama::Error> {
     site_nav(return_path, 0, false)
-}
-
-/// Public shopping cart view: line items, quantity steppers, totals, and the
-/// "pay deposit to reserve" action.
-#[derive(Template)]
-#[template(path = "storefront_cart.html")]
-struct StorefrontCartTemplate {
-    lines: Vec<PublicLineRow>,
-    has_items: bool,
-    has_priced_items: bool,
-    subtotal_display: String,
-    deposit_display: String,
-    site_header: SiteHeader,
-    site_nav: String,
-    sign_in_url: String,
-    identity_base_url: String,
-    store_url: String,
-    copyright_years: String,
-}
-
-/// Confirmation page shown after a shopper reserves by paying the deposit.
-#[derive(Template)]
-#[template(path = "reserved.html")]
-struct ReservedTemplate {
-    order_id: String,
-    username: String,
-    lines: Vec<ReservedLineRow>,
-    subtotal_display: String,
-    deposit_display: String,
-    site_header: SiteHeader,
-    site_nav: String,
-    copyright_years: String,
-}
-
-#[derive(Clone)]
-pub struct CheckoutOption {
-    pub id: String,
-    pub summary: String,
-    pub selected: bool,
-}
-
-#[derive(Clone)]
-pub struct CheckoutLineRow {
-    pub name: String,
-    pub quantity: u32,
-    pub line_total_display: String,
-}
-
-/// Full-page checkout: address/payment selection and terms acceptance.
-#[derive(Template)]
-#[template(path = "checkout.html")]
-struct CheckoutTemplate {
-    lines: Vec<CheckoutLineRow>,
-    subtotal_display: String,
-    deposit_display: String,
-    billing_addresses: Vec<CheckoutOption>,
-    shipping_addresses: Vec<CheckoutOption>,
-    payment_methods: Vec<CheckoutOption>,
-    has_billing: bool,
-    has_shipping: bool,
-    has_payment_methods: bool,
-    ready: bool,
-    error: String,
-    addresses_url: String,
-    payments_url: String,
-    terms_url: String,
-    site_header: SiteHeader,
-    site_nav: String,
-    copyright_years: String,
-}
-
-/// A resolved, priced line for the public cart view.
-pub struct PublicLineRow {
-    pub line_id: String,
-    pub sku_code: String,
-    pub name: String,
-    pub product_url: String,
-    pub quantity: u32,
-    pub unit_price_display: String,
-    pub line_total_display: String,
-    pub priced: bool,
-}
-
-pub struct ReservedLineRow {
-    pub sku_code: String,
-    pub name: String,
-    pub product_url: String,
-    pub quantity: u32,
-    pub line_total_display: String,
-}
-
-/// A cart line joined with its catalog SKU and store price.
-pub struct PricedLine {
-    pub line_id: String,
-    pub sku_id: String,
-    pub sku_code: String,
-    pub name: String,
-    pub quantity: u32,
-    pub unit_price_cents: u64,
-    pub in_catalog: bool,
 }
 
 /// Join cart lines with catalog SKUs and store prices. Lines without a known
@@ -328,115 +265,6 @@ pub fn render_checkout_html(
         copyright_years: copyright_years(),
     }
     .render()
-}
-
-#[derive(Template)]
-#[template(path = "index.html")]
-struct IndexTemplate {
-    rows: Vec<CartRow>,
-    catalog_configured: bool,
-    identity_configured: bool,
-    catalog_error: Option<String>,
-    identity_error: Option<String>,
-    message: Option<String>,
-    site_header: SiteHeader,
-    site_nav: String,
-    copyright_years: String,
-}
-
-#[derive(Template)]
-#[template(path = "form.html")]
-struct FormTemplate {
-    cart: Option<Cart>,
-    user_id: String,
-    status: String,
-    note: String,
-    identity_users: Vec<UserRef>,
-    error: Option<String>,
-    site_header: SiteHeader,
-    site_nav: String,
-    copyright_years: String,
-}
-
-#[derive(Template)]
-#[template(path = "detail.html")]
-struct DetailTemplate {
-    cart: Cart,
-    user_id: String,
-    status: String,
-    note: String,
-    status_label: String,
-    user_display: String,
-    line_rows: Vec<LineRow>,
-    identity_users: Vec<UserRef>,
-    catalog_skus: Vec<CatalogSkuRef>,
-    line_sku_id: String,
-    line_quantity: String,
-    cart_open: bool,
-    error: Option<String>,
-    site_header: SiteHeader,
-    site_nav: String,
-    copyright_years: String,
-}
-
-pub struct CartRow {
-    pub cart: Cart,
-    pub user_display: String,
-    pub status_label: String,
-    pub line_count: usize,
-    pub missing_user: bool,
-}
-
-pub struct LineRow {
-    pub line_id: String,
-    pub sku_code: String,
-    pub name: String,
-    pub quantity: u32,
-    pub missing_catalog: bool,
-}
-
-pub struct UserRef {
-    pub id: String,
-    pub display_name: String,
-    pub email: Option<String>,
-}
-
-pub struct CatalogSkuRef {
-    pub id: String,
-    pub sku_code: String,
-    pub name: String,
-}
-
-pub struct CartFormValues {
-    pub user_id: String,
-    pub status: String,
-    pub note: String,
-}
-
-#[derive(Default)]
-pub struct LineFormValues {
-    pub sku_id: String,
-    pub quantity: String,
-}
-
-pub struct IndexContext<'a> {
-    pub catalog_skus: &'a [CatalogSku],
-    pub identity_users: &'a [IdentityUser],
-    pub catalog_configured: bool,
-    pub identity_configured: bool,
-    pub catalog_error: Option<String>,
-    pub identity_error: Option<String>,
-    pub message: Option<String>,
-}
-
-impl CartFormValues {
-    pub fn from_cart(cart: &Cart) -> Self {
-        Self {
-            user_id: cart.user_id.clone().unwrap_or_default(),
-            status: status_to_form(cart.status),
-            note: cart.note.clone().unwrap_or_default(),
-        }
-    }
 }
 
 fn status_to_form(status: CartStatus) -> String {

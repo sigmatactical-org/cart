@@ -1,6 +1,10 @@
+mod checkout_form;
+mod checkout_session;
+pub(crate) use checkout_form::CheckoutForm;
+pub(crate) use checkout_session::CheckoutSession;
+
 use std::convert::Infallible;
 
-use serde::Deserialize;
 use warp::http::StatusCode;
 use warp::http::header::{LOCATION, SET_COOKIE};
 use warp::reply::Response;
@@ -27,6 +31,7 @@ const CART_COOKIE: &str = "sigma_cart";
 /// Guest cart cookie lifetime (30 days).
 const CART_COOKIE_MAX_AGE: i64 = 60 * 60 * 24 * 30;
 
+/// Build this module's routes.
 pub fn routes(
     store: impl Filter<Extract = (SharedStore,), Error = Infallible> + Clone + Send + 'static,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone + Send + 'static {
@@ -259,20 +264,6 @@ fn change_line(
                 Ok(redirect_to("/", None))
             },
         )
-}
-
-#[derive(Debug, Deserialize)]
-struct CheckoutForm {
-    billing_address_id: String,
-    shipping_address_id: String,
-    payment_method_id: String,
-    #[serde(default)]
-    accept_terms: Option<String>,
-}
-
-struct CheckoutSession {
-    user_id: String,
-    username: String,
 }
 
 fn sign_in_redirect(return_path: &str) -> Response {

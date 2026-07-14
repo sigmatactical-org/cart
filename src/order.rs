@@ -1,74 +1,13 @@
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum OrderError {
-    #[error("order service not configured")]
-    NotConfigured,
-    #[error("order service request failed: {0}")]
-    Request(String),
-}
-
-/// Line payload for `POST /orders`.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct CreateOrderLine {
-    pub sku_id: String,
-    pub sku_code: String,
-    pub name: String,
-    pub quantity: u32,
-    pub unit_price_cents: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub line_total_cents: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deposit_cents: Option<u64>,
-}
-
-/// Request body for `POST /orders`.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct CreateOrderRequest {
-    pub cart_id: String,
-    pub username: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
-    pub lines: Vec<CreateOrderLine>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtotal_cents: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deposit_cents: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub billing_address_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shipping_address_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub payment_method_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub charge_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub terms_accepted_at: Option<String>,
-}
-
-/// Order returned by the order service (confirmation page).
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct Order {
-    pub id: String,
-    pub username: String,
-    pub lines: Vec<OrderLine>,
-    pub subtotal_cents: u64,
-    pub deposit_cents: u64,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct OrderLine {
-    pub sku_code: String,
-    pub name: String,
-    pub quantity: u32,
-    pub line_total_cents: u64,
-}
+mod create_order_line;
+mod create_order_request;
+mod order;
+mod order_error;
+mod order_line;
+pub use create_order_line::CreateOrderLine;
+pub use create_order_request::CreateOrderRequest;
+pub use order::Order;
+pub use order_error::OrderError;
+pub use order_line::OrderLine;
 
 /// Create a committed order in the orders service.
 pub async fn create_order(input: CreateOrderRequest) -> Result<Order, OrderError> {

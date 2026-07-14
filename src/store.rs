@@ -1,36 +1,12 @@
+mod store_error;
+pub use store_error::StoreError;
+
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
-use thiserror::Error;
 
 use crate::model::{Cart, CartLine, CartStatus, CreateCart, CreateLine, UpdateCart, UpdateLine};
-
-#[derive(Debug, Error)]
-pub enum StoreError {
-    #[error("cart not found")]
-    CartNotFound,
-    #[error("line not found")]
-    LineNotFound,
-    #[error("sku_id is required")]
-    SkuIdRequired,
-    #[error("quantity must be at least 1")]
-    InvalidQuantity,
-    #[error("cart is not open")]
-    CartNotOpen,
-    #[error("user not found: {0}")]
-    UserNotFound(String),
-    #[error("database error: {0}")]
-    Database(#[from] anyhow::Error),
-    #[error("{0}")]
-    InvalidInput(String),
-}
-
-impl From<sqlx::Error> for StoreError {
-    fn from(err: sqlx::Error) -> Self {
-        Self::Database(err.into())
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct CartStore {

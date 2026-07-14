@@ -1,61 +1,13 @@
 //! Client for the payments service internal JSON API.
 
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct PaymentMethodSummary {
-    pub id: String,
-    pub method_type: String,
-    #[serde(default)]
-    pub label: Option<String>,
-    #[serde(default)]
-    pub brand: Option<String>,
-    pub last4: String,
-    #[serde(default)]
-    pub is_default: bool,
-}
-
-impl PaymentMethodSummary {
-    #[must_use]
-    pub fn short_summary(&self) -> String {
-        let brand = self
-            .brand
-            .as_deref()
-            .or(self.label.as_deref())
-            .unwrap_or(self.method_type.as_str());
-        format!("{brand} ···· {}", self.last4)
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-pub struct Charge {
-    pub id: String,
-    pub status: String,
-    #[serde(default)]
-    pub failure_reason: Option<String>,
-    pub amount_cents: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct CreateChargeBody<'a> {
-    user_id: &'a str,
-    payment_method_id: &'a str,
-    amount_cents: u64,
-    currency: &'a str,
-    reference: &'a str,
-}
-
-#[derive(Debug, Error)]
-pub enum PaymentsClientError {
-    #[error("HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("payments request failed: {0}")]
-    Request(String),
-    #[error("payment declined: {0}")]
-    Declined(String),
-}
+mod charge;
+mod create_charge_body;
+mod payment_method_summary;
+mod payments_client_error;
+pub use charge::Charge;
+pub(crate) use create_charge_body::CreateChargeBody;
+pub use payment_method_summary::PaymentMethodSummary;
+pub use payments_client_error::PaymentsClientError;
 
 fn payments_url(path: &str) -> Result<String, PaymentsClientError> {
     let base = crate::config::payments_internal_base_url().ok_or_else(|| {

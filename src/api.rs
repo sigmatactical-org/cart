@@ -1,3 +1,12 @@
+mod cart_detail;
+mod cart_line_detail;
+mod error_body;
+mod store_reject;
+pub(crate) use cart_detail::CartDetail;
+pub(crate) use cart_line_detail::CartLineDetail;
+pub(crate) use error_body::ErrorBody;
+pub(crate) use store_reject::StoreReject;
+
 use std::convert::Infallible;
 
 use warp::http::StatusCode;
@@ -7,26 +16,8 @@ use warp::{Filter, Rejection, Reply};
 use crate::SharedStore;
 use crate::catalog::{self, CatalogSku};
 use crate::identity::{self, IdentityUser};
-use crate::model::{Cart, CartLine, CreateCart, CreateLine, UpdateCart, UpdateLine};
+use crate::model::{Cart, CreateCart, CreateLine, UpdateCart, UpdateLine};
 use crate::store::StoreError;
-
-#[derive(serde::Serialize)]
-struct ErrorBody {
-    error: String,
-}
-
-#[derive(serde::Serialize)]
-struct CartLineDetail {
-    line: CartLine,
-    sku: Option<CatalogSku>,
-}
-
-#[derive(serde::Serialize)]
-struct CartDetail {
-    cart: Cart,
-    user: Option<IdentityUser>,
-    lines: Vec<CartLineDetail>,
-}
 
 fn json_error(status: StatusCode, message: impl Into<String>) -> Response {
     warp::reply::with_status(
@@ -140,6 +131,7 @@ async fn require_catalog_sku(sku_id: &str) -> Result<(), Response> {
     })
 }
 
+/// Build this module's routes.
 pub fn routes(
     store: impl Filter<Extract = (SharedStore,), Error = Infallible> + Clone + Send + 'static,
 ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone + Send + 'static {
@@ -398,9 +390,3 @@ fn delete_line(
             },
         )
 }
-
-#[derive(Debug)]
-#[allow(dead_code)]
-struct StoreReject(StoreError);
-
-impl warp::reject::Reject for StoreReject {}

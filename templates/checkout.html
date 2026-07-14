@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}Checkout — Sigma Cart{% endblock %}
+
+
+{% block main_class %}store-main product-page{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <h1 class="mb-2 product-title">Checkout</h1>
+  <p class="text-secondary mb-4">Pay the 50% deposit to reserve your build.</p>
+
+  {% if error != "" %}
+  <div class="alert alert-danger" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <div class="row g-4 align-items-start">
+    <div class="col-lg-7">
+      <div class="card product-card mb-4">
+        <div class="card-body">
+          <h2 class="h5 mb-3">Order summary</h2>
+          <ul class="list-unstyled mb-0">
+            {% for line in lines %}
+            <li class="d-flex justify-content-between gap-3 py-2 border-bottom border-secondary-subtle">
+              <span>
+                <span class="fw-semibold">{{ line.name }}</span>
+                <span class="text-secondary small"> × {{ line.quantity }}</span>
+              </span>
+              <span class="fw-semibold">{{ line.line_total_display }}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          <dl class="row mt-3 mb-0">
+            <dt class="col-7 text-secondary">Subtotal</dt>
+            <dd class="col-5 text-end fw-semibold">{{ subtotal_display }}</dd>
+            <dt class="col-7 text-secondary">Deposit due now (50%)</dt>
+            <dd class="col-5 text-end fs-5 fw-semibold product-price">{{ deposit_display }}</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-lg-5">
+      {% if !ready %}
+      <div class="card product-card">
+        <div class="card-body">
+          <h2 class="h5 mb-3">Complete your account</h2>
+          <p class="text-secondary small mb-3">
+            Add a billing address, shipping address, and payment method before paying the deposit.
+          </p>
+          <ul class="list-unstyled mb-0">
+            {% if !has_billing %}
+            <li class="mb-2">
+              <a class="btn btn-outline-light btn-sm" href="{{ addresses_url|safe }}">Add billing address</a>
+            </li>
+            {% endif %}
+            {% if !has_shipping %}
+            <li class="mb-2">
+              <a class="btn btn-outline-light btn-sm" href="{{ addresses_url|safe }}">Add shipping address</a>
+            </li>
+            {% endif %}
+            {% if !has_payment_methods %}
+            <li class="mb-2">
+              <a class="btn btn-outline-light btn-sm" href="{{ payments_url|safe }}">Add payment method</a>
+            </li>
+            {% endif %}
+          </ul>
+          <p class="mt-3 mb-0">
+            <a class="btn btn-primary btn-sm" href="/checkout">Refresh checkout</a>
+            <a class="btn btn-outline-secondary btn-sm" href="/">Back to cart</a>
+          </p>
+        </div>
+      </div>
+      {% else %}
+      <div class="card product-card">
+        <div class="card-body">
+          <h2 class="h5 mb-3">Payment details</h2>
+          <form method="post" action="/checkout">
+            <div class="mb-3">
+              <label class="form-label" for="billing_address_id">Billing address</label>
+              <select class="form-select" id="billing_address_id" name="billing_address_id" required>
+                {% for addr in billing_addresses %}
+                <option value="{{ addr.id }}" {% if addr.selected %}selected{% endif %}>{{ addr.summary }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="shipping_address_id">Shipping address</label>
+              <select class="form-select" id="shipping_address_id" name="shipping_address_id" required>
+                {% for addr in shipping_addresses %}
+                <option value="{{ addr.id }}" {% if addr.selected %}selected{% endif %}>{{ addr.summary }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label" for="payment_method_id">Payment method</label>
+              <select class="form-select" id="payment_method_id" name="payment_method_id" required>
+                {% for method in payment_methods %}
+                <option value="{{ method.id }}" {% if method.selected %}selected{% endif %}>{{ method.summary }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="form-check mb-4">
+              <input class="form-check-input" type="checkbox" value="1" id="accept_terms" name="accept_terms" required>
+              <label class="form-check-label" for="accept_terms">
+                I agree to the
+                <a href="{{ terms_url|safe }}" target="_blank" rel="noopener">Terms and Conditions</a>
+              </label>
+            </div>
+            <button type="submit" class="btn btn-primary w-100">Pay {{ deposit_display }} deposit</button>
+            <a class="btn btn-outline-secondary w-100 mt-2" href="/">Back to cart</a>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

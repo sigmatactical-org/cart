@@ -1,5 +1,8 @@
 # sigma-cart
 
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![MSRV](https://img.shields.io/badge/MSRV-1.97.0-blue.svg)](https://www.rust-lang.org)
+
 Public shopping cart service for Sigma Tactical Group. It owns the customer-facing cart UI that storefronts (e.g. [sigma-store](https://github.com/sigmatactical-org/store)) add items to, plus an internal admin UI and JSON API. Carts are stored locally; catalog SKUs come from [sigma-catalog](https://github.com/sigmatactical-org/catalog), prices from the store, and users from identity.
 
 ## Public vs internal

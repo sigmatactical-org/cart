@@ -99,13 +99,9 @@
 
           <div id="product-order-form-wrap" class="d-none">
             <p class="text-secondary small mb-3">
-              A 50% deposit reserves your build. Sigma Tactical Group will contact you to arrange
-              payment and delivery.
+              Continue to checkout to choose billing, shipping, and payment, then pay the 50% deposit.
             </p>
-            <form method="post" action="/reserve">
-              <input type="hidden" id="product-order-username" name="username" value="" />
-              <button type="submit" class="btn btn-primary w-100">Reserve — pay {{ deposit_display }} deposit</button>
-            </form>
+            <a class="btn btn-primary w-100" href="/checkout">Checkout — pay {{ deposit_display }} deposit</a>
           </div>
           {% endif %}
         </div>

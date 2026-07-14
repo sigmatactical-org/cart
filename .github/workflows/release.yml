@@ -30,7 +30,7 @@ permissions:
   id-token: write
 
 env:
-  RUST_TOOLCHAIN: "1.90.0"
+  RUST_TOOLCHAIN: "1.97.0"
   NODE_VERSION: "22"
   CARGO_TERM_COLOR: always
   CONTAINER_PORT: "8080"

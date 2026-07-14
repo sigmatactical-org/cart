@@ -117,6 +117,59 @@ pub fn orders_configured() -> bool {
     orders_base_url().is_some()
 }
 
+/// Cluster-internal addresses service URL for checkout address lists.
+#[must_use]
+pub fn addresses_internal_base_url() -> Option<String> {
+    std::env::var("CART_ADDRESSES_INTERNAL_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| normalize_base_url(&s))
+}
+
+/// Public addresses URL for “add address” links on checkout.
+#[must_use]
+pub fn addresses_public_base_url() -> String {
+    std::env::var("CART_ADDRESSES_PUBLIC_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| normalize_base_url(&s))
+        .unwrap_or_else(|| "http://127.0.0.1:8089/".to_string())
+}
+
+/// Cluster-internal payments service URL for methods + charges.
+#[must_use]
+pub fn payments_internal_base_url() -> Option<String> {
+    std::env::var("CART_PAYMENTS_INTERNAL_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| normalize_base_url(&s))
+}
+
+/// Public payments URL for “add payment method” links on checkout.
+#[must_use]
+pub fn payments_public_base_url() -> String {
+    std::env::var("CART_PAYMENTS_PUBLIC_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| normalize_base_url(&s))
+        .unwrap_or_else(|| "http://127.0.0.1:8090/".to_string())
+}
+
+/// Public info site URL for Terms and Conditions (`/doc/terms`).
+#[must_use]
+pub fn info_public_base_url() -> String {
+    std::env::var("CART_INFO_PUBLIC_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| normalize_base_url(&s))
+        .unwrap_or_else(|| "http://127.0.0.1:8085/".to_string())
+}
+
+#[must_use]
+pub fn terms_url() -> String {
+    format!("{}doc/terms", info_public_base_url())
+}
+
 /// Public store URL for a product detail page (`/products/{sku_code}`).
 #[must_use]
 pub fn store_product_url(sku_code: &str) -> String {

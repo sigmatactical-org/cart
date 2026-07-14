@@ -21,6 +21,13 @@ fn storefront_page_header(store_url: &str) -> SiteHeader {
         .with_breadcrumb(Breadcrumb::current("Cart"))
 }
 
+fn checkout_page_header(store_url: &str) -> SiteHeader {
+    page_header("Sigma Cart")
+        .with_breadcrumb(Breadcrumb::link(store_url, "Store"))
+        .with_breadcrumb(Breadcrumb::link("/", "Cart"))
+        .with_breadcrumb(Breadcrumb::current("Checkout"))
+}
+
 fn site_nav(
     return_path: &str,
     cart_count: u32,
@@ -40,11 +47,11 @@ fn site_nav(
 }
 
 fn storefront_site_nav(cart_count: u32) -> Result<String, askama::Error> {
-    site_nav("/", cart_count, true)
+    site_nav("/", cart_count, false)
 }
 
 fn admin_site_nav(return_path: &str) -> Result<String, askama::Error> {
-    site_nav(return_path, 0, true)
+    site_nav(return_path, 0, false)
 }
 
 /// Public shopping cart view: line items, quantity steppers, totals, and the
@@ -74,6 +81,43 @@ struct ReservedTemplate {
     lines: Vec<ReservedLineRow>,
     subtotal_display: String,
     deposit_display: String,
+    site_header: SiteHeader,
+    site_nav: String,
+    copyright_years: String,
+}
+
+#[derive(Clone)]
+pub struct CheckoutOption {
+    pub id: String,
+    pub summary: String,
+    pub selected: bool,
+}
+
+#[derive(Clone)]
+pub struct CheckoutLineRow {
+    pub name: String,
+    pub quantity: u32,
+    pub line_total_display: String,
+}
+
+/// Full-page checkout: address/payment selection and terms acceptance.
+#[derive(Template)]
+#[template(path = "checkout.html")]
+struct CheckoutTemplate {
+    lines: Vec<CheckoutLineRow>,
+    subtotal_display: String,
+    deposit_display: String,
+    billing_addresses: Vec<CheckoutOption>,
+    shipping_addresses: Vec<CheckoutOption>,
+    payment_methods: Vec<CheckoutOption>,
+    has_billing: bool,
+    has_shipping: bool,
+    has_payment_methods: bool,
+    ready: bool,
+    error: String,
+    addresses_url: String,
+    payments_url: String,
+    terms_url: String,
     site_header: SiteHeader,
     site_nav: String,
     copyright_years: String,
@@ -227,6 +271,60 @@ pub fn render_reserved_html(order: &Order) -> Result<String, askama::Error> {
         deposit_display: format_price_cents(order.deposit_cents),
         site_header: storefront_page_header(&store_url),
         site_nav: storefront_site_nav(0)?,
+        copyright_years: copyright_years(),
+    }
+    .render()
+}
+
+/// # Errors
+///
+/// Returns [`askama::Error`] when template rendering fails.
+#[allow(clippy::too_many_arguments)]
+pub fn render_checkout_html(
+    lines: &[PricedLine],
+    billing: &[CheckoutOption],
+    shipping: &[CheckoutOption],
+    payment_methods: &[CheckoutOption],
+    error: &str,
+) -> Result<String, askama::Error> {
+    let priced: Vec<_> = lines.iter().filter(|l| l.unit_price_cents > 0).collect();
+    let subtotal: u64 = priced
+        .iter()
+        .map(|l| l.unit_price_cents.saturating_mul(u64::from(l.quantity)))
+        .sum();
+    let deposit = deposit_cents_for_price(subtotal);
+    let checkout_lines: Vec<CheckoutLineRow> = priced
+        .iter()
+        .map(|l| CheckoutLineRow {
+            name: l.name.clone(),
+            quantity: l.quantity,
+            line_total_display: format_price_cents(
+                l.unit_price_cents.saturating_mul(u64::from(l.quantity)),
+            ),
+        })
+        .collect();
+    let has_billing = !billing.is_empty();
+    let has_shipping = !shipping.is_empty();
+    let has_payment_methods = !payment_methods.is_empty();
+    let ready = has_billing && has_shipping && has_payment_methods;
+    let store_url = config::store_public_base_url();
+    CheckoutTemplate {
+        lines: checkout_lines,
+        subtotal_display: format_price_cents(subtotal),
+        deposit_display: format_price_cents(deposit),
+        billing_addresses: billing.to_vec(),
+        shipping_addresses: shipping.to_vec(),
+        payment_methods: payment_methods.to_vec(),
+        has_billing,
+        has_shipping,
+        has_payment_methods,
+        ready,
+        error: error.to_string(),
+        addresses_url: config::addresses_public_base_url(),
+        payments_url: config::payments_public_base_url(),
+        terms_url: config::terms_url(),
+        site_header: checkout_page_header(&store_url),
+        site_nav: storefront_site_nav(u32::try_from(lines.len()).unwrap_or(0))?,
         copyright_years: copyright_years(),
     }
     .render()

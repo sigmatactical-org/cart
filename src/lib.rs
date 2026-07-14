@@ -1,11 +1,13 @@
 //! Sigma Cart: shopping carts backed by catalog SKUs and identity users.
 
+mod addresses_client;
 mod api;
 mod catalog;
 pub mod config;
 mod identity;
 mod model;
 mod order;
+mod payments_client;
 pub mod store;
 mod storefront;
 mod templates;

@@ -1,17 +1,25 @@
 use std::convert::Infallible;
 
+use serde::Deserialize;
 use warp::http::StatusCode;
 use warp::http::header::{LOCATION, SET_COOKIE};
+use warp::reply::Response;
 use warp::{Filter, Rejection, Reply};
 
 use crate::SharedStore;
+use crate::addresses_client::{self, AddressSummary};
 use crate::catalog;
 use crate::identity;
-use crate::model::{CartForm, CartStatus, CreateLine, LineForm, UpdateLine};
+use crate::model::{
+    CartForm, CartStatus, CreateLine, LineForm, UpdateLine, deposit_cents_for_price,
+};
 use crate::order::{self, CreateOrderLine, CreateOrderRequest};
+use crate::payments_client::{self, PaymentMethodSummary};
 use crate::store::StoreError;
 use crate::storefront;
-use crate::templates::{self, CartFormValues, IndexContext, LineFormValues};
+use crate::templates::{
+    self, CartFormValues, CheckoutOption, IndexContext, LineFormValues, PricedLine,
+};
 
 /// Cookie tying a browser to its guest cart. Shared with the storefront so it
 /// can show a live item count (same host in dev, shared parent domain in prod).
@@ -26,7 +34,9 @@ pub fn routes(
     cart_view(store.clone())
         .or(add_to_cart(store.clone()))
         .or(change_line(store.clone()))
-        .or(reserve(store.clone()))
+        .or(checkout_get(store.clone()))
+        .or(checkout_post(store.clone()))
+        .or(reserve_redirect())
         // Internal admin UI (reached through the identity proxy in production).
         .or(admin_index(store.clone()))
         .or(admin_new_cart(store.clone()))
@@ -251,67 +261,283 @@ fn change_line(
         )
 }
 
-/// Reserve the cart by paying the deposit: `POST /reserve` (requires identity session).
-fn reserve(
-    store: impl Filter<Extract = (SharedStore,), Error = Infallible> + Clone + Send + 'static,
-) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone + Send + 'static {
+#[derive(Debug, Deserialize)]
+struct CheckoutForm {
+    billing_address_id: String,
+    shipping_address_id: String,
+    payment_method_id: String,
+    #[serde(default)]
+    accept_terms: Option<String>,
+}
+
+struct CheckoutSession {
+    user_id: String,
+    username: String,
+}
+
+fn sign_in_redirect(return_path: &str) -> Response {
+    let links = sigma_identity_nav::auth_links(
+        &crate::config::identity_public_base_url(),
+        &crate::config::public_base_url(),
+        return_path,
+    );
+    match warp::http::Uri::from_maybe_shared(links.sign_in_url) {
+        Ok(uri) => warp::redirect::see_other(uri).into_response(),
+        Err(_) => warp::reply::with_status(warp::reply(), StatusCode::INTERNAL_SERVER_ERROR)
+            .into_response(),
+    }
+}
+
+async fn require_checkout_session(cookie: Option<&str>) -> Result<CheckoutSession, Response> {
+    let status = sigma_pg::clients::session::fetch_identity_status(
+        &crate::config::identity_internal_base_url(),
+        cookie,
+    )
+    .await;
+    let session = match status {
+        Ok(Some(session)) => session,
+        Ok(None) => return Err(sign_in_redirect("/checkout")),
+        Err(error) => {
+            tracing::error!("checkout: fetch_identity_status failed: {error:?}");
+            return Err(sign_in_redirect("/checkout"));
+        }
+    };
+    let user_id = session
+        .user_id
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| sign_in_redirect("/checkout"))?;
+    let username = session
+        .username
+        .or(session.email)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "customer".to_string());
+    Ok(CheckoutSession { user_id, username })
+}
+
+fn address_options(addresses: &[AddressSummary], selected: Option<&str>) -> Vec<CheckoutOption> {
+    let selected = selected
+        .or_else(|| {
+            addresses
+                .iter()
+                .find(|a| a.is_default)
+                .map(|a| a.id.as_str())
+        })
+        .or_else(|| addresses.first().map(|a| a.id.as_str()));
+    addresses
+        .iter()
+        .map(|a| CheckoutOption {
+            id: a.id.clone(),
+            summary: a.short_summary(),
+            selected: selected == Some(a.id.as_str()),
+        })
+        .collect()
+}
+
+fn payment_options(
+    methods: &[PaymentMethodSummary],
+    selected: Option<&str>,
+) -> Vec<CheckoutOption> {
+    let selected = selected
+        .or_else(|| methods.iter().find(|m| m.is_default).map(|m| m.id.as_str()))
+        .or_else(|| methods.first().map(|m| m.id.as_str()));
+    methods
+        .iter()
+        .map(|m| CheckoutOption {
+            id: m.id.clone(),
+            summary: m.short_summary(),
+            selected: selected == Some(m.id.as_str()),
+        })
+        .collect()
+}
+
+async fn load_checkout_priced_lines(
+    store: &SharedStore,
+    cookie: Option<&str>,
+) -> Option<(String, Vec<PricedLine>)> {
+    let cart_id = cart_id_from_cookie(cookie)?;
+    let cart = store
+        .get(&cart_id)
+        .await
+        .ok()
+        .flatten()
+        .filter(|c| c.status == CartStatus::Open)?;
+    let catalog_skus = catalog::fetch_skus().await.ok()?;
+    let prices = storefront::fetch_prices().await.ok()?;
+    let lines = templates::priced_lines(&cart, &catalog_skus, &prices);
+    if !lines.iter().any(|l| l.unit_price_cents > 0) {
+        return None;
+    }
+    Some((cart_id, lines))
+}
+
+fn checkout_html_reply(
+    lines: &[PricedLine],
+    billing: &[CheckoutOption],
+    shipping: &[CheckoutOption],
+    payment_methods: &[CheckoutOption],
+    error: &str,
+) -> Result<Response, Rejection> {
+    let html = templates::render_checkout_html(lines, billing, shipping, payment_methods, error)
+        .map_err(|_| warp::reject::not_found())?;
+    Ok(warp::reply::html(html).into_response())
+}
+
+/// Legacy path: `POST /reserve` → checkout.
+fn reserve_redirect()
+-> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone + Send + 'static {
     warp::path("reserve")
         .and(warp::path::end())
-        .and(warp::post())
+        .and(warp::post().or(warp::get()).unify())
+        .map(|| redirect_to("/checkout", None))
+}
+
+/// Checkout page: `GET /checkout` (requires identity session).
+fn checkout_get(
+    store: impl Filter<Extract = (SharedStore,), Error = Infallible> + Clone + Send + 'static,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone + Send + 'static {
+    warp::path("checkout")
+        .and(warp::path::end())
+        .and(warp::get())
         .and(warp::header::optional::<String>("cookie"))
         .and(store)
         .and_then(|cookie: Option<String>, store: SharedStore| async move {
-            let Some(session) = sigma_pg::clients::session::fetch_identity_status(
-                &crate::config::identity_internal_base_url(),
-                cookie.as_deref(),
-            )
-            .await
-            .map_err(|error| {
-                tracing::error!("reserve: fetch_identity_status failed: {error:?}");
-                warp::reject::not_found()
-            })?
+            let session = match require_checkout_session(cookie.as_deref()).await {
+                Ok(session) => session,
+                Err(response) => return Ok::<_, Rejection>(response),
+            };
+            let Some((_cart_id, lines)) =
+                load_checkout_priced_lines(&store, cookie.as_deref()).await
             else {
-                return Ok::<_, Rejection>(redirect_to("/", None));
+                return Ok(redirect_to("/", None));
             };
-            let username = session
-                .username
-                .or(session.email)
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_default();
-            if username.is_empty() {
-                return Ok::<_, Rejection>(redirect_to("/", None));
-            }
 
-            let Some(cart_id) = cart_id_from_cookie(cookie.as_deref()) else {
-                return Ok::<_, Rejection>(redirect_to("/", None));
-            };
-            let cart = store
-                .get(&cart_id)
+            let billing = addresses_client::list_addresses(&session.user_id, "billing")
                 .await
-                .ok()
-                .flatten()
-                .filter(|c| c.status == CartStatus::Open);
-            let Some(cart) = cart else {
-                return Ok::<_, Rejection>(redirect_to("/", None));
-            };
+                .unwrap_or_else(|e| {
+                    tracing::warn!("checkout: list billing addresses failed: {e}");
+                    Vec::new()
+                });
+            let shipping = addresses_client::list_addresses(&session.user_id, "shipping")
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!("checkout: list shipping addresses failed: {e}");
+                    Vec::new()
+                });
+            let methods = payments_client::list_payment_methods(&session.user_id)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!("checkout: list payment methods failed: {e}");
+                    Vec::new()
+                });
 
-            let catalog_skus = match catalog::fetch_skus().await {
-                Ok(skus) => skus,
-                Err(_) => return Ok(redirect_to("/", None)),
-            };
-            let prices = match storefront::fetch_prices().await {
-                Ok(prices) => prices,
-                Err(_) => return Ok(redirect_to("/", None)),
-            };
+            checkout_html_reply(
+                &lines,
+                &address_options(&billing, None),
+                &address_options(&shipping, None),
+                &payment_options(&methods, None),
+                "",
+            )
+        })
+}
 
-            let order_lines: Vec<CreateOrderLine> =
-                templates::priced_lines(&cart, &catalog_skus, &prices)
-                    .into_iter()
+/// Pay deposit and create order: `POST /checkout`.
+fn checkout_post(
+    store: impl Filter<Extract = (SharedStore,), Error = Infallible> + Clone + Send + 'static,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone + Send + 'static {
+    warp::path("checkout")
+        .and(warp::path::end())
+        .and(warp::post())
+        .and(warp::header::optional::<String>("cookie"))
+        .and(warp::body::form())
+        .and(store)
+        .and_then(
+            |cookie: Option<String>, form: CheckoutForm, store: SharedStore| async move {
+                let session = match require_checkout_session(cookie.as_deref()).await {
+                    Ok(session) => session,
+                    Err(response) => return Ok::<_, Rejection>(response),
+                };
+                let Some((cart_id, lines)) =
+                    load_checkout_priced_lines(&store, cookie.as_deref()).await
+                else {
+                    return Ok(redirect_to("/", None));
+                };
+
+                let billing = addresses_client::list_addresses(&session.user_id, "billing")
+                    .await
+                    .unwrap_or_default();
+                let shipping = addresses_client::list_addresses(&session.user_id, "shipping")
+                    .await
+                    .unwrap_or_default();
+                let methods = payments_client::list_payment_methods(&session.user_id)
+                    .await
+                    .unwrap_or_default();
+
+                let redisplay = |error: &str| {
+                    checkout_html_reply(
+                        &lines,
+                        &address_options(&billing, Some(form.billing_address_id.as_str())),
+                        &address_options(&shipping, Some(form.shipping_address_id.as_str())),
+                        &payment_options(&methods, Some(form.payment_method_id.as_str())),
+                        error,
+                    )
+                };
+
+                if form.accept_terms.as_deref().is_none_or(|v| v.trim().is_empty()) {
+                    return redisplay("Please accept the Terms and Conditions.");
+                }
+                if billing.is_empty() || shipping.is_empty() || methods.is_empty() {
+                    return redisplay(
+                        "Add a billing address, shipping address, and payment method before paying.",
+                    );
+                }
+                if !billing.iter().any(|a| a.id == form.billing_address_id) {
+                    return redisplay("Select a valid billing address.");
+                }
+                if !shipping.iter().any(|a| a.id == form.shipping_address_id) {
+                    return redisplay("Select a valid shipping address.");
+                }
+                if !methods.iter().any(|m| m.id == form.payment_method_id) {
+                    return redisplay("Select a valid payment method.");
+                }
+
+                let subtotal: u64 = lines
+                    .iter()
+                    .filter(|l| l.unit_price_cents > 0)
+                    .map(|l| l.unit_price_cents.saturating_mul(u64::from(l.quantity)))
+                    .sum();
+                let deposit = deposit_cents_for_price(subtotal);
+                if deposit == 0 {
+                    return Ok(redirect_to("/", None));
+                }
+
+                let charge = match payments_client::create_charge(
+                    &session.user_id,
+                    &form.payment_method_id,
+                    deposit,
+                    &cart_id,
+                )
+                .await
+                {
+                    Ok(charge) if charge.status == "succeeded" => charge,
+                    Ok(_) => {
+                        return redisplay("Payment was declined. Try another method.");
+                    }
+                    Err(payments_client::PaymentsClientError::Declined(reason)) => {
+                        return redisplay(&format!("Payment declined: {reason}"));
+                    }
+                    Err(e) => {
+                        tracing::warn!("checkout: charge failed: {e}");
+                        return redisplay("Payment failed. Please try again.");
+                    }
+                };
+
+                let order_lines: Vec<CreateOrderLine> = lines
+                    .iter()
                     .filter(|l| l.unit_price_cents > 0)
                     .map(|l| CreateOrderLine {
-                        sku_id: l.sku_id,
-                        sku_code: l.sku_code,
-                        name: l.name,
+                        sku_id: l.sku_id.clone(),
+                        sku_code: l.sku_code.clone(),
+                        name: l.name.clone(),
                         quantity: l.quantity,
                         unit_price_cents: l.unit_price_cents,
                         line_total_cents: None,
@@ -319,39 +545,49 @@ fn reserve(
                     })
                     .collect();
 
-            if order_lines.is_empty() {
-                return Ok::<_, Rejection>(redirect_to("/", None));
-            }
+                let order = match order::create_order(CreateOrderRequest {
+                    cart_id: cart_id.clone(),
+                    username: session.username.clone(),
+                    user_id: Some(session.user_id.clone()),
+                    lines: order_lines,
+                    id: None,
+                    status: Some("deposit_paid".to_string()),
+                    subtotal_cents: Some(subtotal),
+                    deposit_cents: Some(deposit),
+                    created_at: None,
+                    billing_address_id: Some(form.billing_address_id.clone()),
+                    shipping_address_id: Some(form.shipping_address_id.clone()),
+                    payment_method_id: Some(form.payment_method_id.clone()),
+                    charge_id: Some(charge.id.clone()),
+                    terms_accepted_at: Some(chrono::Utc::now().to_rfc3339()),
+                })
+                .await
+                {
+                    Ok(order) => order,
+                    Err(e) => {
+                        tracing::error!(
+                            "checkout: order create failed after charge {}: {e}",
+                            charge.id
+                        );
+                        return redisplay(
+                            "Payment succeeded but order creation failed. Contact support with your cart id.",
+                        );
+                    }
+                };
 
-            let order = match order::create_order(CreateOrderRequest {
-                cart_id: cart_id.clone(),
-                username,
-                user_id: session.user_id.or(cart.user_id.clone()),
-                lines: order_lines,
-                id: None,
-                status: None,
-                subtotal_cents: None,
-                deposit_cents: None,
-                created_at: None,
-            })
-            .await
-            {
-                Ok(order) => order,
-                Err(e) => {
-                    tracing::warn!("order create failed: {e}");
-                    return Ok::<_, Rejection>(redirect_to("/", None));
+                if let Err(e) = store.set_status(&cart_id, CartStatus::Submitted).await {
+                    tracing::warn!("cart submit after order {} failed: {e}", order.id);
                 }
-            };
 
-            if let Err(e) = store.set_status(&cart_id, CartStatus::Submitted).await {
-                tracing::warn!("cart submit after order {} failed: {e}", order.id);
-            }
-
-            let html =
-                templates::render_reserved_html(&order).map_err(|_| warp::reject::not_found())?;
-            let reply = warp::reply::html(html);
-            Ok(warp::reply::with_header(reply, SET_COOKIE, clear_cart_cookie()).into_response())
-        })
+                let html = templates::render_reserved_html(&order)
+                    .map_err(|_| warp::reject::not_found())?;
+                let reply = warp::reply::html(html);
+                Ok(
+                    warp::reply::with_header(reply, SET_COOKIE, clear_cart_cookie())
+                        .into_response(),
+                )
+            },
+        )
 }
 
 // ---------------------------------------------------------------------------

@@ -49,7 +49,7 @@ use sigma_theme::nav::{Breadcrumb, SiteHeader, site_menu};
 use sigma_theme::site_nav::{AppSiteNav, render_app_site_nav};
 
 fn page_header() -> SiteHeader {
-    SiteHeader::new().with_menu(site_menu(None))
+    SiteHeader::new("Cart").with_menu(site_menu(None))
 }
 
 fn storefront_page_header(store_url: &str) -> SiteHeader {

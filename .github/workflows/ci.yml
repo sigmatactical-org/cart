@@ -36,6 +36,7 @@ jobs:
           - 5432:5432
     env:
       DATABASE_URL: postgres://sigma:sigma@127.0.0.1:5432/sigma
+      SIGMA_TEST_DB_OK: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/checkout@v7

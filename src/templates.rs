@@ -45,21 +45,21 @@ use crate::order::Order;
 use crate::storefront::PriceBook;
 use sigma_identity_nav::auth_links;
 use sigma_theme::copyright_years;
-use sigma_theme::nav::{Breadcrumb, SiteHeader};
+use sigma_theme::nav::{Breadcrumb, SiteHeader, site_menu};
 use sigma_theme::site_nav::{AppSiteNav, render_app_site_nav};
 
-fn page_header(brand: &str) -> SiteHeader {
-    SiteHeader::new(brand)
+fn page_header() -> SiteHeader {
+    SiteHeader::new().with_menu(site_menu(None))
 }
 
 fn storefront_page_header(store_url: &str) -> SiteHeader {
-    page_header("Sigma Cart")
+    page_header()
         .with_breadcrumb(Breadcrumb::link(store_url, "Store"))
         .with_breadcrumb(Breadcrumb::current("Cart"))
 }
 
 fn checkout_page_header(store_url: &str) -> SiteHeader {
-    page_header("Sigma Cart")
+    page_header()
         .with_breadcrumb(Breadcrumb::link(store_url, "Store"))
         .with_breadcrumb(Breadcrumb::link("/", "Cart"))
         .with_breadcrumb(Breadcrumb::current("Checkout"))
@@ -361,7 +361,7 @@ fn render_form(
         note: values.note,
         identity_users: user_refs(identity_users),
         error,
-        site_header: page_header("Sigma Cart"),
+        site_header: page_header(),
         site_nav: admin_site_nav(&return_path)?,
         copyright_years: copyright_years(),
     }
@@ -393,7 +393,7 @@ fn render_detail(
         cart,
         error,
         site_nav,
-        site_header: page_header("Sigma Cart"),
+        site_header: page_header(),
         copyright_years: copyright_years(),
     }
     .render()
@@ -411,7 +411,7 @@ pub fn render_index_html(carts: Vec<Cart>, ctx: IndexContext<'_>) -> Result<Stri
         catalog_error: ctx.catalog_error,
         identity_error: ctx.identity_error,
         message: ctx.message,
-        site_header: page_header("Sigma Cart"),
+        site_header: page_header(),
         site_nav: admin_site_nav("/admin")?,
         copyright_years: copyright_years(),
     }

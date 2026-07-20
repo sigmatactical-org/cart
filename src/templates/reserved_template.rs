@@ -1,7 +1,6 @@
 //! [`ReservedTemplate`].
 
-#[allow(unused_imports)]
-use super::*;
+use super::ReservedLineRow;
 use askama::Template;
 use sigma_theme::nav::SiteHeader;
 

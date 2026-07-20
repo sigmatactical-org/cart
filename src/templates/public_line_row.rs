@@ -1,8 +1,5 @@
 //! [`PublicLineRow`].
 
-#[allow(unused_imports)]
-use super::*;
-
 /// A resolved, priced line for the public cart view.
 pub struct PublicLineRow {
     pub line_id: String,

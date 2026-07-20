@@ -1,7 +1,6 @@
 //! [`CheckoutTemplate`].
 
-#[allow(unused_imports)]
-use super::*;
+use super::{CheckoutLineRow, CheckoutOption};
 use askama::Template;
 use sigma_theme::nav::SiteHeader;
 

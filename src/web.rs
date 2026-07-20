@@ -1,23 +1,27 @@
+//! Public shopping-cart UI, checkout, and the internal admin pages.
+
+mod checkout_choice;
 mod checkout_form;
 mod checkout_session;
+pub(crate) use checkout_choice::CheckoutChoice;
 pub(crate) use checkout_form::CheckoutForm;
 pub(crate) use checkout_session::CheckoutSession;
 
 use std::convert::Infallible;
 
+use sigma_pg::clients::addresses::{self, AddressSummary};
+use sigma_pg::clients::orders::{self, CreateOrder, CreateOrderLine, OrderStatus};
+use sigma_pg::money::deposit_cents_for_price;
 use warp::http::StatusCode;
 use warp::http::header::{LOCATION, SET_COOKIE};
 use warp::reply::Response;
 use warp::{Filter, Rejection, Reply};
 
 use crate::SharedStore;
-use crate::addresses_client::{self, AddressSummary};
+use crate::accounting_client;
 use crate::catalog;
 use crate::identity;
-use crate::model::{
-    CartForm, CartStatus, CreateLine, LineForm, UpdateLine, deposit_cents_for_price,
-};
-use crate::order::{self, CreateOrderLine, CreateOrderRequest};
+use crate::model::{CartForm, CartStatus, CreateLine, LineForm, UpdateLine};
 use crate::payments_client::{self, PaymentMethodSummary};
 use crate::store::StoreError;
 use crate::storefront;
@@ -44,7 +48,7 @@ pub fn routes(
         .or(reserve_redirect())
         // Internal admin UI (reached through the identity proxy in production).
         .or(admin_index(store.clone()))
-        .or(admin_new_cart(store.clone()))
+        .or(admin_new_cart())
         .or(admin_create_cart(store.clone()))
         .or(admin_cart_detail(store.clone()))
         .or(admin_update_cart(store.clone()))
@@ -58,29 +62,13 @@ pub fn routes(
 // ---------------------------------------------------------------------------
 
 fn cart_id_from_cookie(cookie_header: Option<&str>) -> Option<String> {
-    cookie_header?.split(';').find_map(|pair| {
-        let (name, value) = pair.split_once('=')?;
-        (name.trim() == CART_COOKIE)
-            .then(|| value.trim().to_string())
-            .filter(|v| !v.is_empty())
-    })
+    sigma_pg::clients::cart::cart_id_from_cookie(cookie_header)
 }
 
-fn set_cart_cookie(cart_id: &str) -> String {
-    let mut cookie = format!(
-        "{CART_COOKIE}={cart_id}; Path=/; HttpOnly; Max-Age={CART_COOKIE_MAX_AGE}; SameSite=Lax"
-    );
-    if crate::config::public_base_url().starts_with("https://") {
-        cookie.push_str("; Secure");
-    }
-    if let Some(domain) = crate::config::cookie_domain() {
-        cookie.push_str(&format!("; Domain={domain}"));
-    }
-    cookie
-}
-
-fn clear_cart_cookie() -> String {
-    let mut cookie = format!("{CART_COOKIE}=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax");
+/// `Set-Cookie` value for the guest cart. `max_age` of 0 clears it.
+fn cart_cookie(cart_id: &str, max_age: i64) -> String {
+    let mut cookie =
+        format!("{CART_COOKIE}={cart_id}; Path=/; HttpOnly; Max-Age={max_age}; SameSite=Lax");
     if crate::config::public_base_url().starts_with("https://") {
         cookie.push_str("; Secure");
     }
@@ -91,7 +79,7 @@ fn clear_cart_cookie() -> String {
 }
 
 /// 303 redirect, optionally attaching a `Set-Cookie` header.
-fn redirect_to(location: &'static str, set_cookie: Option<String>) -> warp::reply::Response {
+fn redirect_to(location: &'static str, set_cookie: Option<String>) -> Response {
     let redirect = warp::reply::with_header(warp::reply(), LOCATION, location);
     let redirect = warp::reply::with_status(redirect, StatusCode::SEE_OTHER);
     match set_cookie {
@@ -118,11 +106,15 @@ fn cart_view(
                 None => None,
             };
             let cart = cart.filter(|c| c.status == CartStatus::Open);
-            let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
-            let prices = storefront::fetch_prices().await.unwrap_or_default();
-            templates::render_storefront_cart_html(cart.as_ref(), &catalog_skus, &prices)
-                .map(warp::reply::html)
-                .map_err(|_| warp::reject::not_found())
+            let (catalog_skus, prices) =
+                tokio::join!(catalog::fetch_skus(), storefront::fetch_prices());
+            templates::render_storefront_cart_html(
+                cart.as_ref(),
+                &catalog_skus.unwrap_or_default(),
+                &prices.unwrap_or_default(),
+            )
+            .map(warp::reply::html)
+            .map_err(|_| warp::reject::not_found())
         })
 }
 
@@ -153,63 +145,41 @@ fn add_to_cart(
                     return Err(warp::reject::not_found());
                 }
 
-                let mut set_cookie: Option<String> = None;
-                let cart_id = match cart_id_from_cookie(cookie.as_deref()) {
-                    Some(id)
-                        if store
-                            .get(&id)
-                            .await
-                            .ok()
-                            .flatten()
-                            .is_some_and(|c| c.status == CartStatus::Open) =>
-                    {
-                        id
-                    }
-                    _ => {
-                        let cart = store.create(Default::default()).await.map_err(|error| {
-                            tracing::error!("add_to_cart: store.create failed: {error:?}");
-                            warp::reject::not_found()
-                        })?;
-                        set_cookie = Some(set_cart_cookie(&cart.id));
-                        cart.id
-                    }
+                // `add_line` upserts against an open cart in one statement, so
+                // the common case is a single write with no pre-read. Only a
+                // missing or closed cart falls through to creating a new one.
+                let line = CreateLine {
+                    sku_id: sku_id.clone(),
+                    quantity: 1,
                 };
+                if let Some(cart_id) = cart_id_from_cookie(cookie.as_deref()) {
+                    match store.add_line(&cart_id, line.clone()).await {
+                        Ok(_) => return Ok(redirect_to("/", None)),
+                        Err(StoreError::CartNotFound | StoreError::CartNotOpen) => {}
+                        Err(error) => {
+                            tracing::error!(
+                                "add_to_cart: line write for cart {cart_id} failed: {error:?}"
+                            );
+                            return Err(warp::reject::not_found());
+                        }
+                    }
+                }
 
-                // Merge with an existing line for the same SKU.
-                let existing = store
-                    .get(&cart_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|c| c.lines.into_iter().find(|l| l.sku_id == sku_id));
-                let result = match existing {
-                    Some(line) => store
-                        .update_line(
-                            &cart_id,
-                            &line.id,
-                            UpdateLine {
-                                quantity: line.quantity + 1,
-                            },
-                        )
-                        .await
-                        .map(|_| ()),
-                    None => store
-                        .add_line(
-                            &cart_id,
-                            CreateLine {
-                                sku_id: sku_id.clone(),
-                                quantity: 1,
-                            },
-                        )
-                        .await
-                        .map(|_| ()),
-                };
-                result.map_err(|error| {
-                    tracing::error!("add_to_cart: line write for cart {cart_id} failed: {error:?}");
+                let cart = store.create(Default::default()).await.map_err(|error| {
+                    tracing::error!("add_to_cart: store.create failed: {error:?}");
                     warp::reject::not_found()
                 })?;
-
-                Ok(redirect_to("/", set_cookie))
+                store.add_line(&cart.id, line).await.map_err(|error| {
+                    tracing::error!(
+                        "add_to_cart: line write for cart {} failed: {error:?}",
+                        cart.id
+                    );
+                    warp::reject::not_found()
+                })?;
+                Ok(redirect_to(
+                    "/",
+                    Some(cart_cookie(&cart.id, CART_COOKIE_MAX_AGE)),
+                ))
             },
         )
 }
@@ -235,7 +205,7 @@ fn change_line(
                     .flatten()
                     .and_then(|c| c.lines.into_iter().find(|l| l.id == line_id));
                 let Some(line) = current else {
-                    return Ok::<_, Rejection>(redirect_to("/", None));
+                    return Ok(redirect_to("/", None));
                 };
                 let _ = match action.as_str() {
                     "increment" => store
@@ -274,8 +244,7 @@ fn sign_in_redirect(return_path: &str) -> Response {
     );
     match warp::http::Uri::from_maybe_shared(links.sign_in_url) {
         Ok(uri) => warp::redirect::see_other(uri).into_response(),
-        Err(_) => warp::reply::with_status(warp::reply(), StatusCode::INTERNAL_SERVER_ERROR)
-            .into_response(),
+        Err(_) => internal_server_error(),
     }
 }
 
@@ -305,40 +274,54 @@ async fn require_checkout_session(cookie: Option<&str>) -> Result<CheckoutSessio
     Ok(CheckoutSession { user_id, username })
 }
 
-fn address_options(addresses: &[AddressSummary], selected: Option<&str>) -> Vec<CheckoutOption> {
+/// Build the `<select>` options, preselecting the submitted choice, else the
+/// caller's default, else the first entry.
+fn checkout_options<T: CheckoutChoice>(items: &[T], selected: Option<&str>) -> Vec<CheckoutOption> {
     let selected = selected
         .or_else(|| {
-            addresses
+            items
                 .iter()
-                .find(|a| a.is_default)
-                .map(|a| a.id.as_str())
+                .find(|item| item.is_choice_default())
+                .map(CheckoutChoice::choice_id)
         })
-        .or_else(|| addresses.first().map(|a| a.id.as_str()));
-    addresses
+        .or_else(|| items.first().map(CheckoutChoice::choice_id));
+    items
         .iter()
-        .map(|a| CheckoutOption {
-            id: a.id.clone(),
-            summary: a.short_summary(),
-            selected: selected == Some(a.id.as_str()),
+        .map(|item| CheckoutOption {
+            id: item.choice_id().to_string(),
+            summary: item.choice_summary(),
+            selected: selected == Some(item.choice_id()),
         })
         .collect()
 }
 
-fn payment_options(
-    methods: &[PaymentMethodSummary],
-    selected: Option<&str>,
-) -> Vec<CheckoutOption> {
-    let selected = selected
-        .or_else(|| methods.iter().find(|m| m.is_default).map(|m| m.id.as_str()))
-        .or_else(|| methods.first().map(|m| m.id.as_str()));
-    methods
-        .iter()
-        .map(|m| CheckoutOption {
-            id: m.id.clone(),
-            summary: m.short_summary(),
-            selected: selected == Some(m.id.as_str()),
-        })
-        .collect()
+/// The shopper's saved billing/shipping addresses and payment methods, fetched
+/// concurrently. Each list degrades to empty (the page then explains why).
+async fn checkout_choices(
+    user_id: &str,
+) -> (
+    Vec<AddressSummary>,
+    Vec<AddressSummary>,
+    Vec<PaymentMethodSummary>,
+) {
+    let addresses_base = crate::config::addresses_internal_base_url();
+    let (billing, shipping, methods) = tokio::join!(
+        addresses::list_addresses(addresses_base.as_deref(), user_id, "billing"),
+        addresses::list_addresses(addresses_base.as_deref(), user_id, "shipping"),
+        payments_client::list_payment_methods(user_id),
+    );
+    (
+        unwrap_or_warn(billing, "billing addresses"),
+        unwrap_or_warn(shipping, "shipping addresses"),
+        unwrap_or_warn(methods, "payment methods"),
+    )
+}
+
+fn unwrap_or_warn<T, E: std::fmt::Display>(result: Result<Vec<T>, E>, what: &str) -> Vec<T> {
+    result.unwrap_or_else(|e| {
+        tracing::warn!("checkout: list {what} failed: {e}");
+        Vec::new()
+    })
 }
 
 async fn load_checkout_priced_lines(
@@ -352,8 +335,10 @@ async fn load_checkout_priced_lines(
         .ok()
         .flatten()
         .filter(|c| c.status == CartStatus::Open)?;
-    let catalog_skus = catalog::fetch_skus().await.ok()?;
-    let prices = storefront::fetch_prices().await.ok()?;
+    // Both lists are process-cached, so a checkout POST reuses what the GET
+    // that rendered the form already fetched.
+    let (catalog_skus, prices) = tokio::join!(catalog::fetch_skus(), storefront::fetch_prices());
+    let (catalog_skus, prices) = (catalog_skus.ok()?, prices.ok()?);
     let lines = templates::priced_lines(&cart, &catalog_skus, &prices);
     if !lines.iter().any(|l| l.unit_price_cents > 0) {
         return None;
@@ -363,9 +348,9 @@ async fn load_checkout_priced_lines(
 
 fn checkout_html_reply(
     lines: &[PricedLine],
-    billing: &[CheckoutOption],
-    shipping: &[CheckoutOption],
-    payment_methods: &[CheckoutOption],
+    billing: Vec<CheckoutOption>,
+    shipping: Vec<CheckoutOption>,
+    payment_methods: Vec<CheckoutOption>,
     error: &str,
 ) -> Result<Response, Rejection> {
     let html = templates::render_checkout_html(lines, billing, shipping, payment_methods, error)
@@ -402,30 +387,12 @@ fn checkout_get(
                 return Ok(redirect_to("/", None));
             };
 
-            let billing = addresses_client::list_addresses(&session.user_id, "billing")
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!("checkout: list billing addresses failed: {e}");
-                    Vec::new()
-                });
-            let shipping = addresses_client::list_addresses(&session.user_id, "shipping")
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!("checkout: list shipping addresses failed: {e}");
-                    Vec::new()
-                });
-            let methods = payments_client::list_payment_methods(&session.user_id)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!("checkout: list payment methods failed: {e}");
-                    Vec::new()
-                });
-
+            let (billing, shipping, methods) = checkout_choices(&session.user_id).await;
             checkout_html_reply(
                 &lines,
-                &address_options(&billing, None),
-                &address_options(&shipping, None),
-                &payment_options(&methods, None),
+                checkout_options(&billing, None),
+                checkout_options(&shipping, None),
+                checkout_options(&methods, None),
                 "",
             )
         })
@@ -453,22 +420,13 @@ fn checkout_post(
                     return Ok(redirect_to("/", None));
                 };
 
-                let billing = addresses_client::list_addresses(&session.user_id, "billing")
-                    .await
-                    .unwrap_or_default();
-                let shipping = addresses_client::list_addresses(&session.user_id, "shipping")
-                    .await
-                    .unwrap_or_default();
-                let methods = payments_client::list_payment_methods(&session.user_id)
-                    .await
-                    .unwrap_or_default();
-
+                let (billing, shipping, methods) = checkout_choices(&session.user_id).await;
                 let redisplay = |error: &str| {
                     checkout_html_reply(
                         &lines,
-                        &address_options(&billing, Some(form.billing_address_id.as_str())),
-                        &address_options(&shipping, Some(form.shipping_address_id.as_str())),
-                        &payment_options(&methods, Some(form.payment_method_id.as_str())),
+                        checkout_options(&billing, Some(form.billing_address_id.as_str())),
+                        checkout_options(&shipping, Some(form.shipping_address_id.as_str())),
+                        checkout_options(&methods, Some(form.payment_method_id.as_str())),
                         error,
                     )
                 };
@@ -510,9 +468,7 @@ fn checkout_post(
                 .await
                 {
                     Ok(charge) if charge.status == "succeeded" => charge,
-                    Ok(_) => {
-                        return redisplay("Payment was declined. Try another method.");
-                    }
+                    Ok(_) => return redisplay("Payment was declined. Try another method."),
                     Err(payments_client::PaymentsClientError::Declined(reason)) => {
                         return redisplay(&format!("Payment declined: {reason}"));
                     }
@@ -536,22 +492,26 @@ fn checkout_post(
                     })
                     .collect();
 
-                let order = match order::create_order(CreateOrderRequest {
-                    cart_id: cart_id.clone(),
-                    username: session.username.clone(),
-                    user_id: Some(session.user_id.clone()),
-                    lines: order_lines,
-                    id: None,
-                    status: Some("deposit_paid".to_string()),
-                    subtotal_cents: Some(subtotal),
-                    deposit_cents: Some(deposit),
-                    created_at: None,
-                    billing_address_id: Some(form.billing_address_id.clone()),
-                    shipping_address_id: Some(form.shipping_address_id.clone()),
-                    payment_method_id: Some(form.payment_method_id.clone()),
-                    charge_id: Some(charge.id.clone()),
-                    terms_accepted_at: Some(chrono::Utc::now().to_rfc3339()),
-                })
+                let orders_base = crate::config::orders_base_url();
+                let order = match orders::create_order(
+                    orders_base.as_deref(),
+                    &CreateOrder {
+                        cart_id: cart_id.clone(),
+                        username: session.username.clone(),
+                        user_id: Some(session.user_id.clone()),
+                        lines: order_lines,
+                        id: None,
+                        status: Some(OrderStatus::DepositPaid),
+                        subtotal_cents: Some(subtotal),
+                        deposit_cents: Some(deposit),
+                        created_at: None,
+                        billing_address_id: Some(form.billing_address_id.clone()),
+                        shipping_address_id: Some(form.shipping_address_id.clone()),
+                        payment_method_id: Some(form.payment_method_id.clone()),
+                        charge_id: Some(charge.id.clone()),
+                        terms_accepted_at: Some(chrono::Utc::now().to_rfc3339()),
+                    },
+                )
                 .await
                 {
                     Ok(order) => order,
@@ -566,15 +526,31 @@ fn checkout_post(
                     }
                 };
 
+                // Best-effort: a paid checkout must never fail because
+                // accounting is down. Anything missed here is backfilled by
+                // accounting's reconcile against the payments charge log.
+                if let Err(e) = accounting_client::record_deposit_receipt(
+                    &session.user_id,
+                    &charge.id,
+                    &order.id,
+                    deposit,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        "checkout: accounting receipt for charge {} failed: {e}",
+                        charge.id
+                    );
+                }
+
                 if let Err(e) = store.set_status(&cart_id, CartStatus::Submitted).await {
                     tracing::warn!("cart submit after order {} failed: {e}", order.id);
                 }
 
                 let html = templates::render_reserved_html(&order)
                     .map_err(|_| warp::reject::not_found())?;
-                let reply = warp::reply::html(html);
                 Ok(
-                    warp::reply::with_header(reply, SET_COOKIE, clear_cart_cookie())
+                    warp::reply::with_header(warp::reply::html(html), SET_COOKIE, cart_cookie("", 0))
                         .into_response(),
                 )
             },
@@ -593,23 +569,21 @@ fn admin_index(
         .and(warp::get())
         .and(store)
         .and_then(|store: SharedStore| async move {
-            let carts = store.list().await.map_err(|_| warp::reject::not_found())?;
-            let catalog_result = catalog::fetch_skus().await;
-            let identity_result = identity::fetch_users().await;
-            let (catalog_skus, catalog_error) = match catalog_result {
-                Ok(skus) => (Some(skus), None),
-                Err(e) => (None, Some(e.to_string())),
-            };
+            let (carts, catalog_result, identity_result) =
+                tokio::join!(store.list(), catalog::fetch_skus(), identity::fetch_users());
+            let carts = carts.map_err(|_| warp::reject::not_found())?;
+            let catalog_error = catalog_result.err().map(|e| e.to_string());
             let (identity_users, identity_error) = match identity_result {
-                Ok(users) => (Some(users), None),
-                Err(e) if crate::config::identity_configured() => (None, Some(e.to_string())),
-                Err(_) => (None, None),
+                Ok(users) => (users, None),
+                Err(e) if crate::config::identity_configured() => {
+                    (Default::default(), Some(e.to_string()))
+                }
+                Err(_) => (Default::default(), None),
             };
             templates::render_index_html(
                 carts,
                 IndexContext {
-                    catalog_skus: catalog_skus.as_deref().unwrap_or(&[]),
-                    identity_users: identity_users.as_deref().unwrap_or(&[]),
+                    identity_users: &identity_users,
                     catalog_configured: crate::config::catalog_configured(),
                     identity_configured: crate::config::identity_configured(),
                     catalog_error,
@@ -622,18 +596,20 @@ fn admin_index(
         })
 }
 
-fn admin_new_cart(
-    store: impl Filter<Extract = (SharedStore,), Error = Infallible> + Clone + Send + 'static,
-) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone + Send + 'static {
+fn admin_new_cart()
+-> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone + Send + 'static {
     warp::path!("admin" / "carts" / "new")
         .and(warp::get())
-        .and(store)
-        .and_then(|store: SharedStore| async move {
-            let carts = store.list().await.map_err(|_| warp::reject::not_found())?;
+        .and_then(|| async move {
             let identity_users = identity::fetch_users().await.unwrap_or_default();
-            templates::render_cart_form_html(carts, &identity_users, None, None)
-                .map(warp::reply::html)
-                .map_err(|_| warp::reject::not_found())
+            templates::render_cart_form_html_with_values(
+                &identity_users,
+                None,
+                None,
+                CartFormValues::for_cart(None),
+            )
+            .map(warp::reply::html)
+            .map_err(|_| warp::reject::not_found())
         })
 }
 
@@ -645,7 +621,6 @@ fn admin_create_cart(
         .and(warp::body::form())
         .and(store)
         .and_then(|form: CartForm, store: SharedStore| async move {
-            let carts = store.list().await.map_err(|_| warp::reject::not_found())?;
             let identity_users = identity::fetch_users().await.unwrap_or_default();
             let values = cart_form_to_values(&form);
             let response = match form.into_create() {
@@ -659,24 +634,18 @@ fn admin_create_cart(
                         .is_none()
                     {
                         render_cart_form_error(
-                            carts,
                             &identity_users,
-                            None,
                             values,
                             invalid_input("identity user not found".to_string()),
                         )
                     } else {
                         match store.create(input).await {
                             Ok(cart) => redirect(format!("/admin/carts/{}", cart.id)),
-                            Err(e) => {
-                                render_cart_form_error(carts, &identity_users, None, values, e)
-                            }
+                            Err(e) => render_cart_form_error(&identity_users, values, e),
                         }
                     }
                 }
-                Err(e) => {
-                    render_cart_form_error(carts, &identity_users, None, values, invalid_input(e))
-                }
+                Err(e) => render_cart_form_error(&identity_users, values, invalid_input(e)),
             };
             Ok::<_, Rejection>(response)
         })
@@ -696,11 +665,19 @@ fn admin_cart_detail(
             else {
                 return Err(warp::reject::not_found());
             };
-            let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
-            let identity_users = identity::fetch_users().await.unwrap_or_default();
-            templates::render_detail_html(cart, &catalog_skus, &identity_users, None, None)
-                .map(warp::reply::html)
-                .map_err(|_| warp::reject::not_found())
+            let (catalog_skus, identity_users) =
+                tokio::join!(catalog::fetch_skus(), identity::fetch_users());
+            let values = CartFormValues::from_cart(&cart);
+            templates::render_detail_html_with_values(
+                cart,
+                &catalog_skus.unwrap_or_default(),
+                &identity_users.unwrap_or_default(),
+                None,
+                values,
+                LineFormValues::default(),
+            )
+            .map(warp::reply::html)
+            .map_err(|_| warp::reject::not_found())
         })
 }
 
@@ -713,11 +690,10 @@ fn admin_update_cart(
         .and(store)
         .and_then(
             |id: String, form: CartForm, store: SharedStore| async move {
-                let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
-                let identity_users = identity::fetch_users().await.unwrap_or_default();
                 let values = cart_form_to_values(&form);
-                let response = match form.into_update() {
+                let error = match form.into_update() {
                     Ok(input) => {
+                        let identity_users = identity::fetch_users().await.unwrap_or_default();
                         if crate::config::identity_configured()
                             && input.user_id.is_some()
                             && identity::user_by_id(
@@ -726,42 +702,25 @@ fn admin_update_cart(
                             )
                             .is_none()
                         {
-                            let cart = store.get(&id).await.ok().flatten();
-                            render_detail_error(
-                                cart,
-                                &catalog_skus,
-                                &identity_users,
-                                values,
-                                invalid_input("identity user not found".to_string()),
-                            )
+                            invalid_input("identity user not found".to_string())
                         } else {
                             match store.update(&id, input).await {
-                                Ok(cart) => redirect(format!("/admin/carts/{}", cart.id)),
-                                Err(e) => {
-                                    let cart = store.get(&id).await.ok().flatten();
-                                    render_detail_error(
-                                        cart,
-                                        &catalog_skus,
-                                        &identity_users,
-                                        values,
-                                        e,
-                                    )
+                                Ok(cart) => {
+                                    return Ok::<_, Rejection>(redirect(format!(
+                                        "/admin/carts/{}",
+                                        cart.id
+                                    )));
                                 }
+                                Err(e) => e,
                             }
                         }
                     }
-                    Err(e) => {
-                        let cart = store.get(&id).await.ok().flatten();
-                        render_detail_error(
-                            cart,
-                            &catalog_skus,
-                            &identity_users,
-                            values,
-                            invalid_input(e),
-                        )
-                    }
+                    Err(e) => invalid_input(e),
                 };
-                Ok::<_, Rejection>(response)
+                Ok(
+                    render_detail_error(&store, &id, values, LineFormValues::default(), error)
+                        .await,
+                )
             },
         )
 }
@@ -775,56 +734,31 @@ fn admin_add_line(
         .and(store)
         .and_then(
             |cart_id: String, form: LineForm, store: SharedStore| async move {
-                let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
-                let identity_users = identity::fetch_users().await.unwrap_or_default();
                 let line_values = line_form_to_values(&form);
-                let response = match form.into_create() {
+                let error = match form.into_create() {
                     Ok(input) => {
+                        let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
                         if !catalog_skus.is_empty()
                             && catalog::validate_sku_id(&catalog_skus, input.sku_id.trim()).is_err()
                         {
-                            let cart = store.get(&cart_id).await.ok().flatten();
-                            render_detail_line_error(
-                                cart,
-                                &catalog_skus,
-                                &identity_users,
-                                line_values,
-                                invalid_input(format!(
-                                    "catalog sku not found: {}",
-                                    input.sku_id.trim()
-                                )),
-                            )
+                            invalid_input(format!("catalog sku not found: {}", input.sku_id.trim()))
                         } else {
                             match store.add_line(&cart_id, input).await {
-                                Ok(_) => redirect(format!("/admin/carts/{cart_id}")),
+                                Ok(_) => {
+                                    return Ok::<_, Rejection>(redirect(format!(
+                                        "/admin/carts/{cart_id}"
+                                    )));
+                                }
                                 Err(StoreError::CartNotFound) => {
                                     return Err(warp::reject::not_found());
                                 }
-                                Err(e) => {
-                                    let cart = store.get(&cart_id).await.ok().flatten();
-                                    render_detail_line_error(
-                                        cart,
-                                        &catalog_skus,
-                                        &identity_users,
-                                        line_values,
-                                        e,
-                                    )
-                                }
+                                Err(e) => e,
                             }
                         }
                     }
-                    Err(e) => {
-                        let cart = store.get(&cart_id).await.ok().flatten();
-                        render_detail_line_error(
-                            cart,
-                            &catalog_skus,
-                            &identity_users,
-                            line_values,
-                            invalid_input(e),
-                        )
-                    }
+                    Err(e) => invalid_input(e),
                 };
-                Ok(response)
+                Ok(render_detail_line_error(&store, &cart_id, line_values, error).await)
             },
         )
 }
@@ -837,23 +771,19 @@ fn admin_delete_line(
         .and(store)
         .and_then(
             |cart_id: String, line_id: String, store: SharedStore| async move {
-                let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
-                let identity_users = identity::fetch_users().await.unwrap_or_default();
                 match store.delete_line(&cart_id, &line_id).await {
                     Ok(()) => Ok(redirect(format!("/admin/carts/{cart_id}"))),
                     Err(StoreError::CartNotFound | StoreError::LineNotFound) => {
                         Err(warp::reject::not_found())
                     }
-                    Err(e) => {
-                        let cart = store.get(&cart_id).await.ok().flatten();
-                        Ok(render_detail_line_error(
-                            cart,
-                            &catalog_skus,
-                            &identity_users,
-                            LineFormValues::default(),
-                            e,
-                        ))
-                    }
+                    // Only the failure path needs the SKU and user lists.
+                    Err(e) => Ok(render_detail_line_error(
+                        &store,
+                        &cart_id,
+                        LineFormValues::default(),
+                        e,
+                    )
+                    .await),
                 }
             },
         )
@@ -866,18 +796,18 @@ fn admin_delete_cart(
         .and(warp::post())
         .and(store)
         .and_then(|id: String, store: SharedStore| async move {
-            let catalog_skus = catalog::fetch_skus().await.unwrap_or_default();
-            let identity_users = identity::fetch_users().await.unwrap_or_default();
             match store.delete(&id).await {
                 Ok(()) => Ok(redirect("/admin".to_string())),
                 Err(StoreError::CartNotFound) => Err(warp::reject::not_found()),
+                // Only the failure path needs the cart and user lists.
                 Err(e) => {
-                    let carts = store.list().await.map_err(|_| warp::reject::not_found())?;
-                    Ok(templates::render_index_html(
+                    let (carts, identity_users) =
+                        tokio::join!(store.list(), identity::fetch_users());
+                    let carts = carts.map_err(|_| warp::reject::not_found())?;
+                    templates::render_index_html(
                         carts,
                         IndexContext {
-                            catalog_skus: &catalog_skus,
-                            identity_users: &identity_users,
+                            identity_users: &identity_users.unwrap_or_default(),
                             catalog_configured: crate::config::catalog_configured(),
                             identity_configured: crate::config::identity_configured(),
                             catalog_error: None,
@@ -886,7 +816,7 @@ fn admin_delete_cart(
                         },
                     )
                     .map(|html| warp::reply::html(html).into_response())
-                    .map_err(|_| warp::reject::not_found())?)
+                    .map_err(|_| warp::reject::not_found())
                 }
             }
         })
@@ -896,8 +826,25 @@ fn admin_delete_cart(
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-fn redirect(location: String) -> warp::reply::Response {
-    warp::redirect::redirect(warp::http::Uri::from_maybe_shared(location).unwrap()).into_response()
+fn redirect(location: String) -> Response {
+    match warp::http::Uri::from_maybe_shared(location) {
+        Ok(uri) => warp::redirect::redirect(uri).into_response(),
+        Err(_) => internal_server_error(),
+    }
+}
+
+fn internal_server_error() -> Response {
+    warp::reply::with_status(warp::reply(), StatusCode::INTERNAL_SERVER_ERROR).into_response()
+}
+
+/// A rendered admin page is a 400 (the form is redisplayed with its error); a
+/// render failure is a 500.
+fn html_or_500(html: Result<String, askama::Error>) -> Response {
+    match html {
+        Ok(html) => warp::reply::with_status(warp::reply::html(html), StatusCode::BAD_REQUEST)
+            .into_response(),
+        Err(_) => internal_server_error(),
+    }
 }
 
 fn cart_form_to_values(form: &CartForm) -> CartFormValues {
@@ -919,83 +866,71 @@ fn invalid_input(message: String) -> StoreError {
     StoreError::InvalidInput(message)
 }
 
+/// Redisplay the new-cart form with `err`. Only the create flow reaches this;
+/// editing an existing cart redisplays its detail page instead.
 fn render_cart_form_error(
-    carts: Vec<crate::model::Cart>,
     identity_users: &[identity::IdentityUser],
-    cart: Option<crate::model::Cart>,
     values: CartFormValues,
     err: StoreError,
-) -> warp::reply::Response {
-    let message = err.to_string();
-    match templates::render_cart_form_html_with_values(
-        carts,
+) -> Response {
+    html_or_500(templates::render_cart_form_html_with_values(
         identity_users,
-        cart,
-        Some(message),
+        None,
+        Some(err.to_string()),
         values,
-    ) {
-        Ok(html) => warp::reply::with_status(warp::reply::html(html), StatusCode::BAD_REQUEST)
-            .into_response(),
-        Err(_) => warp::reply::with_status(warp::reply(), StatusCode::INTERNAL_SERVER_ERROR)
-            .into_response(),
-    }
+    ))
 }
 
-fn render_detail_error(
-    cart: Option<crate::model::Cart>,
-    catalog_skus: &[catalog::CatalogSku],
-    identity_users: &[identity::IdentityUser],
-    values: CartFormValues,
-    err: StoreError,
-) -> warp::reply::Response {
-    let message = err.to_string();
-    match cart {
-        Some(cart) => match templates::render_detail_html_with_values(
-            cart,
-            catalog_skus,
-            identity_users,
-            Some(message),
-            values,
-            LineFormValues::default(),
-        ) {
-            Ok(html) => warp::reply::with_status(warp::reply::html(html), StatusCode::BAD_REQUEST)
-                .into_response(),
-            Err(_) => warp::reply::with_status(warp::reply(), StatusCode::INTERNAL_SERVER_ERROR)
-                .into_response(),
-        },
-        None => warp::reply::with_status(warp::reply(), StatusCode::NOT_FOUND).into_response(),
-    }
-}
-
-fn render_detail_line_error(
-    cart: Option<crate::model::Cart>,
-    catalog_skus: &[catalog::CatalogSku],
-    identity_users: &[identity::IdentityUser],
+/// Redisplay the cart detail page with `err`, loading the SKU and user lists
+/// only now that they are needed.
+async fn render_detail_error(
+    store: &SharedStore,
+    cart_id: &str,
+    cart_values: CartFormValues,
     line_values: LineFormValues,
     err: StoreError,
-) -> warp::reply::Response {
-    let message = err.to_string();
-    match cart {
-        Some(cart) => {
-            let cart_values = CartFormValues::from_cart(&cart);
-            match templates::render_detail_html_with_values(
-                cart,
-                catalog_skus,
-                identity_users,
-                Some(message),
-                cart_values,
-                line_values,
-            ) {
-                Ok(html) => {
-                    warp::reply::with_status(warp::reply::html(html), StatusCode::BAD_REQUEST)
-                        .into_response()
-                }
-                Err(_) => {
-                    warp::reply::with_status(warp::reply(), StatusCode::INTERNAL_SERVER_ERROR)
-                        .into_response()
-                }
-            }
-        }
-        None => warp::reply::with_status(warp::reply(), StatusCode::NOT_FOUND).into_response(),
-    }
+) -> Response {
+    let (cart, catalog_skus, identity_users) = tokio::join!(
+        store.get(cart_id),
+        catalog::fetch_skus(),
+        identity::fetch_users()
+    );
+    let Some(cart) = cart.ok().flatten() else {
+        return warp::reply::with_status(warp::reply(), StatusCode::NOT_FOUND).into_response();
+    };
+    html_or_500(templates::render_detail_html_with_values(
+        cart,
+        &catalog_skus.unwrap_or_default(),
+        &identity_users.unwrap_or_default(),
+        Some(err.to_string()),
+        cart_values,
+        line_values,
+    ))
+}
+
+/// Same as [`render_detail_error`], but the cart fields keep their stored
+/// values because only the add-line form was rejected.
+async fn render_detail_line_error(
+    store: &SharedStore,
+    cart_id: &str,
+    line_values: LineFormValues,
+    err: StoreError,
+) -> Response {
+    let (cart, catalog_skus, identity_users) = tokio::join!(
+        store.get(cart_id),
+        catalog::fetch_skus(),
+        identity::fetch_users()
+    );
+    let Some(cart) = cart.ok().flatten() else {
+        return warp::reply::with_status(warp::reply(), StatusCode::NOT_FOUND).into_response();
+    };
+    let cart_values = CartFormValues::from_cart(&cart);
+    html_or_500(templates::render_detail_html_with_values(
+        cart,
+        &catalog_skus.unwrap_or_default(),
+        &identity_users.unwrap_or_default(),
+        Some(err.to_string()),
+        cart_values,
+        line_values,
+    ))
 }

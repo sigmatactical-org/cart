@@ -1,8 +1,8 @@
 //! [`LineForm`].
 
-#[allow(unused_imports)]
-use super::*;
 use serde::Deserialize;
+
+use super::{CreateLine, parse_quantity};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LineForm {

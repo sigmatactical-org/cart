@@ -67,10 +67,10 @@
             </td>
             <td>{{ row.status_label }}</td>
             <td>{{ row.line_count }}</td>
-            <td class="text-secondary"><small>{{ row.cart.updated_at }}</small></td>
+            <td class="text-secondary"><small>{{ row.updated_at }}</small></td>
             <td class="text-nowrap">
-              <a class="btn btn-sm btn-outline-primary" href="/admin/carts/{{ row.cart.id }}">View</a>
-              <form method="post" action="/admin/carts/{{ row.cart.id }}/delete" class="d-inline" onsubmit="return confirm('Delete this cart?');">
+              <a class="btn btn-sm btn-outline-primary" href="/admin/carts/{{ row.id }}">View</a>
+              <form method="post" action="/admin/carts/{{ row.id }}/delete" class="d-inline" onsubmit="return confirm('Delete this cart?');">
                 <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
               </form>
             </td>

@@ -4,14 +4,10 @@
 
 #![forbid(unsafe_code)]
 
-use askama::Template;
+mod cart_nav_template;
+pub(crate) use cart_nav_template::CartNavTemplate;
 
-#[derive(Template)]
-#[template(path = "cart_nav.html")]
-struct CartNavTemplate<'a> {
-    cart_url: &'a str,
-    cart_count: u32,
-}
+use askama::Template;
 
 /// Render the cart icon and item-count badge linking to `cart_url`.
 ///

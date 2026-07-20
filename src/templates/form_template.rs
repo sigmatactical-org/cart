@@ -1,7 +1,6 @@
 //! [`FormTemplate`].
 
-#[allow(unused_imports)]
-use super::*;
+use super::UserRef;
 use crate::model::Cart;
 use askama::Template;
 use sigma_theme::nav::SiteHeader;

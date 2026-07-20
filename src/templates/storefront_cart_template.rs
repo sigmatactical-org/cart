@@ -1,7 +1,6 @@
 //! [`StorefrontCartTemplate`].
 
-#[allow(unused_imports)]
-use super::*;
+use super::PublicLineRow;
 use askama::Template;
 use sigma_theme::nav::SiteHeader;
 

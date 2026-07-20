@@ -38,6 +38,7 @@ Shared site chrome comes from [sigma-theme](https://github.com/sigmatactical-org
 | `CART_CONTACT_PUBLIC_URL` | Public contact service URL for the navbar link (default `http://127.0.0.1:8083/`) |
 | `CART_STORE_PUBLIC_URL` | Public store URL for product and continue-shopping links (default `http://127.0.0.1:8082/`) |
 | `CART_ORDERS_BASE_URL` | Orders service base URL for checkout commit (e.g. `http://127.0.0.1:8085/`) |
+| `CART_ACCOUNTING_INTERNAL_URL` | Accounting service internal base URL (e.g. `http://127.0.0.1:8080/`); when set, a successful checkout records the deposit as an accounting receipt. Best-effort — never fails a paid checkout |
 | `CART_COOKIE_DOMAIN` | Cookie `Domain` so the `sigma_cart` cookie is shared with the storefront across sibling subdomains; leave blank in local dev |
 | `CART_IDENTITY_ISSUER_URL` | OIDC issuer / realm URL (e.g. `http://127.0.0.1:8101/realms/multcorp`) |
 | `CART_IDENTITY_CLIENT_ID` | Service-account client id for Admin API |

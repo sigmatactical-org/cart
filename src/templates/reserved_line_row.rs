@@ -1,8 +1,5 @@
 //! [`ReservedLineRow`].
 
-#[allow(unused_imports)]
-use super::*;
-
 /// One rendered table row.
 pub struct ReservedLineRow {
     pub sku_code: String,

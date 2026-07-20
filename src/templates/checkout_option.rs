@@ -1,8 +1,5 @@
 //! [`CheckoutOption`].
 
-#[allow(unused_imports)]
-use super::*;
-
 #[derive(Clone)]
 pub struct CheckoutOption {
     pub id: String,

@@ -1,7 +1,5 @@
 //! [`CreateChargeBody`].
 
-#[allow(unused_imports)]
-use super::*;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]

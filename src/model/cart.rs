@@ -1,8 +1,8 @@
 //! [`Cart`].
 
-#[allow(unused_imports)]
-use super::*;
 use serde::{Deserialize, Serialize};
+
+use super::{CartLine, CartStatus, CreateCart, UpdateCart};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cart {
@@ -19,14 +19,13 @@ pub struct Cart {
 impl Cart {
     /// New Cart from a create request.
     pub fn new(input: CreateCart) -> Self {
-        let now = chrono::Utc::now().to_rfc3339();
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             user_id: input.user_id.map(|s| s.trim().to_string()),
             status: CartStatus::Open,
             lines: Vec::new(),
             note: input.note,
-            updated_at: now,
+            updated_at: chrono::Utc::now().to_rfc3339(),
         }
     }
 

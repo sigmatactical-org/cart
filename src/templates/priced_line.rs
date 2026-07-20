@@ -1,8 +1,5 @@
 //! [`PricedLine`].
 
-#[allow(unused_imports)]
-use super::*;
-
 /// A cart line joined with its catalog SKU and store price.
 pub struct PricedLine {
     pub line_id: String,

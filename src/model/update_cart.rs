@@ -1,8 +1,8 @@
 //! [`UpdateCart`].
 
-#[allow(unused_imports)]
-use super::*;
 use serde::Deserialize;
+
+use super::CartStatus;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateCart {

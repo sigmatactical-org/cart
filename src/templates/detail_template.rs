@@ -1,7 +1,6 @@
 //! [`DetailTemplate`].
 
-#[allow(unused_imports)]
-use super::*;
+use super::{CatalogSkuRef, LineRow, UserRef};
 use crate::model::Cart;
 use askama::Template;
 use sigma_theme::nav::SiteHeader;
@@ -13,7 +12,7 @@ pub(crate) struct DetailTemplate {
     pub(crate) user_id: String,
     pub(crate) status: String,
     pub(crate) note: String,
-    pub(crate) status_label: String,
+    pub(crate) status_label: &'static str,
     pub(crate) user_display: String,
     pub(crate) line_rows: Vec<LineRow>,
     pub(crate) identity_users: Vec<UserRef>,

@@ -1,8 +1,5 @@
 //! [`LineRow`].
 
-#[allow(unused_imports)]
-use super::*;
-
 /// One rendered table row.
 pub struct LineRow {
     pub line_id: String,

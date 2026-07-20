@@ -2,21 +2,22 @@
 
 #![forbid(unsafe_code)]
 
-mod addresses_client;
+mod accounting_client;
 mod api;
 mod catalog;
 pub mod config;
 mod identity;
 mod model;
-mod order;
 mod payments_client;
 pub mod store;
 mod storefront;
 mod templates;
+#[cfg(test)]
+mod test_support;
 mod web;
 
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use warp::Filter;
 use warp::Reply;
@@ -26,57 +27,29 @@ pub use model::{Cart, CartLine, CartStatus, CreateCart, CreateLine, UpdateCart, 
 /// Shared cart store handle (`PgPool` is internally concurrent).
 pub type SharedStore = Arc<store::CartStore>;
 
-/// Resolve listen address from **`PORT`** (default **8080**).
-#[must_use]
-pub fn listen_socket_addr_from_env() -> std::net::SocketAddr {
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    let port: u16 = std::env::var("PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(8080);
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port)
-}
-
 fn with_store(
     store: SharedStore,
 ) -> impl Filter<Extract = (SharedStore,), Error = Infallible> + Clone {
     warp::any().map(move || store.clone())
 }
 
-fn content_security_policy() -> String {
-    let identity_origin = config::identity_public_origin();
-    format!(
-        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; \
-         img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; \
-         font-src 'self'; connect-src 'self' {identity_origin}; form-action 'self'"
-    )
-}
-
-/// Site routes: web UI, JSON API, `/up`, theme static assets, error recovery.
+/// Site routes: web UI, JSON API, `/up`, theme static assets, error recovery,
+/// and the shared security-header set.
 pub fn routes(
     store: store::CartStore,
 ) -> impl Filter<Extract = (impl Reply,), Error = Infallible> + Clone + Send + 'static {
-    use warp::reply::with::header;
-
     let health_pool = Arc::new(store.pool().clone());
     let store = Arc::new(store);
 
-    warp::path("up")
-        .and(warp::get())
-        .map(|| warp::reply::with_status("up", warp::http::StatusCode::OK))
-        .or(sigma_pg::health::warp::health_routes(
-            "cart",
-            Some(health_pool),
-        ))
-        .or(web::routes(with_store(store.clone())))
-        .or(api::routes(with_store(store)))
-        .or(sigma_theme::warp::static_files())
-        .or(sigma_theme::warp::favicon())
-        .recover(sigma_theme::warp::handle_rejection)
-        .with(header("content-security-policy", content_security_policy()))
-        .with(header("x-content-type-options", "nosniff"))
-        .with(header("x-frame-options", "DENY"))
-        .with(header("referrer-policy", "strict-origin-when-cross-origin"))
+    let site = sigma_theme::warp::site_routes(
+        web::routes(with_store(store.clone())).or(api::routes(with_store(store))),
+        sigma_pg::health::warp::health_routes("cart", Some(health_pool)),
+    );
+    // The header set is built once and shared by every reply, so the CSP's
+    // `connect-src` origin has to outlive the filter.
+    static IDENTITY_ORIGIN: OnceLock<String> = OnceLock::new();
+    let identity_origin = IDENTITY_ORIGIN.get_or_init(config::identity_public_origin);
+    sigma_theme::warp::security_headers(site, identity_origin)
 }
 
 #[cfg(test)]
@@ -93,6 +66,7 @@ mod tests {
 
     #[tokio::test]
     async fn up_returns_ok() {
+        let _db = crate::test_support::db_guard().await;
         let res = warp::test::request()
             .method("GET")
             .path("/up")
@@ -103,6 +77,7 @@ mod tests {
 
     #[tokio::test]
     async fn index_lists_carts() {
+        let _db = crate::test_support::db_guard().await;
         let res = warp::test::request()
             .method("GET")
             .path("/")
@@ -115,6 +90,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_lists_empty_carts() {
+        let _db = crate::test_support::db_guard().await;
         let res = warp::test::request()
             .method("GET")
             .path("/carts")
@@ -132,6 +108,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_create_cart() {
+        let _db = crate::test_support::db_guard().await;
         let res = warp::test::request()
             .method("POST")
             .path("/carts")
@@ -150,6 +127,7 @@ mod tests {
 
     #[tokio::test]
     async fn api_add_line() {
+        let _db = crate::test_support::db_guard().await;
         let store = test_store().await;
         let app = routes(store);
 

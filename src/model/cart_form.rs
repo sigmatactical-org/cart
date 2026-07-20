@@ -1,8 +1,9 @@
 //! [`CartForm`].
 
-#[allow(unused_imports)]
-use super::*;
 use serde::Deserialize;
+use sigma_pg::form::empty_to_none;
+
+use super::{CartStatus, CreateCart, UpdateCart};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CartForm {
@@ -23,7 +24,7 @@ impl CartForm {
     pub fn into_update(self) -> Result<UpdateCart, String> {
         Ok(UpdateCart {
             user_id: empty_to_none(self.user_id),
-            status: parse_status(&self.status)?,
+            status: self.status.parse::<CartStatus>()?,
             note: empty_to_none(self.note),
         })
     }

@@ -1,10 +1,13 @@
-pub use sigma_pg::clients::catalog::{CatalogError, CatalogSku};
+//! Catalog service lookups. `sigma_pg` caches the SKU list per process, so
+//! callers can fetch freely; the `Arc` keeps repeat reads allocation-free.
 
-pub async fn fetch_skus() -> Result<Vec<CatalogSku>, CatalogError> {
+use std::sync::Arc;
+
+pub use sigma_pg::clients::catalog::{CatalogError, CatalogSku, sku_by_id, validate_sku_id};
+
+pub async fn fetch_skus() -> Result<Arc<Vec<CatalogSku>>, CatalogError> {
     sigma_pg::clients::catalog::fetch_skus(crate::config::catalog_base_url().as_deref()).await
 }
-
-pub use sigma_pg::clients::catalog::{sku_by_id, validate_sku_id};
 
 /// Fail-closed SKU validation for mutations when catalog integration is configured.
 pub async fn require_active_sku(sku_id: &str) -> Result<(), CatalogError> {

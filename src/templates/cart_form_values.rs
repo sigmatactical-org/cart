@@ -1,8 +1,6 @@
 //! [`CartFormValues`].
 
-#[allow(unused_imports)]
-use super::*;
-use crate::model::Cart;
+use crate::model::{Cart, CartStatus};
 
 /// Prefilled field values for the edit/create form.
 pub struct CartFormValues {
@@ -12,11 +10,25 @@ pub struct CartFormValues {
 }
 impl CartFormValues {
     /// Prefill from an existing cart.
+    #[must_use]
     pub fn from_cart(cart: &Cart) -> Self {
         Self {
             user_id: cart.user_id.clone().unwrap_or_default(),
-            status: status_to_form(cart.status),
+            status: cart.status.as_str().to_string(),
             note: cart.note.clone().unwrap_or_default(),
+        }
+    }
+
+    /// Prefill from an existing cart, or blank defaults for a new one.
+    #[must_use]
+    pub fn for_cart(cart: Option<&Cart>) -> Self {
+        match cart {
+            Some(cart) => Self::from_cart(cart),
+            None => Self {
+                user_id: String::new(),
+                status: CartStatus::Open.as_str().to_string(),
+                note: String::new(),
+            },
         }
     }
 }

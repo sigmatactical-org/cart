@@ -1,13 +1,16 @@
 //! [`CartDetail`].
 
-#[allow(unused_imports)]
-use super::*;
+use serde::Serialize;
+
+use super::CartLineDetail;
 use crate::identity::IdentityUser;
 use crate::model::Cart;
 
-#[derive(serde::Serialize)]
-pub(crate) struct CartDetail {
-    pub(crate) cart: Cart,
-    pub(crate) user: Option<IdentityUser>,
-    pub(crate) lines: Vec<CartLineDetail>,
+/// Enriched cart on the wire (`{ cart, user, lines }`). Borrows everything it
+/// renders so serving a cart never clones the cart, its lines, or its SKUs.
+#[derive(Serialize)]
+pub(crate) struct CartDetail<'a> {
+    pub(crate) cart: &'a Cart,
+    pub(crate) user: Option<&'a IdentityUser>,
+    pub(crate) lines: Vec<CartLineDetail<'a>>,
 }

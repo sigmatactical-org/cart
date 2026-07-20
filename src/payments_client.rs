@@ -9,6 +9,8 @@ pub(crate) use create_charge_body::CreateChargeBody;
 pub use payment_method_summary::PaymentMethodSummary;
 pub use payments_client_error::PaymentsClientError;
 
+use sigma_pg::clients::http;
+
 fn payments_url(path: &str) -> Result<String, PaymentsClientError> {
     let base = crate::config::payments_internal_base_url().ok_or_else(|| {
         PaymentsClientError::Request("payments service not configured".to_string())
@@ -20,15 +22,12 @@ pub async fn list_payment_methods(
     user_id: &str,
 ) -> Result<Vec<PaymentMethodSummary>, PaymentsClientError> {
     let url = payments_url(&format!("api/users/{user_id}/payment-methods"))?;
-    let response =
-        sigma_pg::clients::http::with_internal_auth(sigma_pg::clients::http::client().get(url))
-            .send()
-            .await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(PaymentsClientError::Request(format!("{status}: {body}")));
-    }
+    let response = http::with_internal_auth(http::client().get(url))
+        .send()
+        .await?;
+    let response = http::ensure_success(response)
+        .await
+        .map_err(PaymentsClientError::Request)?;
     Ok(response.json().await?)
 }
 
@@ -46,13 +45,11 @@ pub async fn create_charge(
         currency: "usd",
         reference,
     };
-    let response = sigma_pg::clients::http::with_internal_auth(
-        sigma_pg::clients::http::client().post(url).json(&body),
-    )
-    .send()
-    .await?;
-    let status = response.status();
-    if status.as_u16() == 402 {
+    let response = http::with_internal_auth(http::client().post(url).json(&body))
+        .send()
+        .await?;
+    // A declined card is a 402 carrying the charge, not a transport failure.
+    if response.status().as_u16() == 402 {
         let charge: Charge = response.json().await?;
         return Err(PaymentsClientError::Declined(
             charge
@@ -60,9 +57,8 @@ pub async fn create_charge(
                 .unwrap_or_else(|| "payment declined".to_string()),
         ));
     }
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(PaymentsClientError::Request(format!("{status}: {body}")));
-    }
+    let response = http::ensure_success(response)
+        .await
+        .map_err(PaymentsClientError::Request)?;
     Ok(response.json().await?)
 }

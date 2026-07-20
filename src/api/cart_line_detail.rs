@@ -1,12 +1,12 @@
 //! [`CartLineDetail`].
 
-#[allow(unused_imports)]
-use super::*;
+use serde::Serialize;
+
 use crate::catalog::CatalogSku;
 use crate::model::CartLine;
 
-#[derive(serde::Serialize)]
-pub(crate) struct CartLineDetail {
-    pub(crate) line: CartLine,
-    pub(crate) sku: Option<CatalogSku>,
+#[derive(Serialize)]
+pub(crate) struct CartLineDetail<'a> {
+    pub(crate) line: &'a CartLine,
+    pub(crate) sku: Option<&'a CatalogSku>,
 }

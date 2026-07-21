@@ -358,6 +358,35 @@ fn checkout_html_reply(
     Ok(warp::reply::html(html).into_response())
 }
 
+/// The first reason a submitted checkout form can't proceed to payment, or
+/// `None` when the terms are accepted and each selection names a real saved
+/// address or payment method.
+fn checkout_rejection(
+    form: &CheckoutForm,
+    billing: &[AddressSummary],
+    shipping: &[AddressSummary],
+    methods: &[PaymentMethodSummary],
+) -> Option<&'static str> {
+    if form.accept_terms.as_deref().is_none_or(|v| v.trim().is_empty()) {
+        return Some("Please accept the Terms and Conditions.");
+    }
+    if billing.is_empty() || shipping.is_empty() || methods.is_empty() {
+        return Some(
+            "Add a billing address, shipping address, and payment method before paying.",
+        );
+    }
+    if !billing.iter().any(|a| a.id == form.billing_address_id) {
+        return Some("Select a valid billing address.");
+    }
+    if !shipping.iter().any(|a| a.id == form.shipping_address_id) {
+        return Some("Select a valid shipping address.");
+    }
+    if !methods.iter().any(|m| m.id == form.payment_method_id) {
+        return Some("Select a valid payment method.");
+    }
+    None
+}
+
 /// Legacy path: `POST /reserve` → checkout.
 fn reserve_redirect()
 -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone + Send + 'static {
@@ -431,22 +460,8 @@ fn checkout_post(
                     )
                 };
 
-                if form.accept_terms.as_deref().is_none_or(|v| v.trim().is_empty()) {
-                    return redisplay("Please accept the Terms and Conditions.");
-                }
-                if billing.is_empty() || shipping.is_empty() || methods.is_empty() {
-                    return redisplay(
-                        "Add a billing address, shipping address, and payment method before paying.",
-                    );
-                }
-                if !billing.iter().any(|a| a.id == form.billing_address_id) {
-                    return redisplay("Select a valid billing address.");
-                }
-                if !shipping.iter().any(|a| a.id == form.shipping_address_id) {
-                    return redisplay("Select a valid shipping address.");
-                }
-                if !methods.iter().any(|m| m.id == form.payment_method_id) {
-                    return redisplay("Select a valid payment method.");
+                if let Some(message) = checkout_rejection(&form, &billing, &shipping, &methods) {
+                    return redisplay(message);
                 }
 
                 let subtotal: u64 = lines

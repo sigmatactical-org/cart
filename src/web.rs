@@ -367,13 +367,15 @@ fn checkout_rejection(
     shipping: &[AddressSummary],
     methods: &[PaymentMethodSummary],
 ) -> Option<&'static str> {
-    if form.accept_terms.as_deref().is_none_or(|v| v.trim().is_empty()) {
+    if form
+        .accept_terms
+        .as_deref()
+        .is_none_or(|v| v.trim().is_empty())
+    {
         return Some("Please accept the Terms and Conditions.");
     }
     if billing.is_empty() || shipping.is_empty() || methods.is_empty() {
-        return Some(
-            "Add a billing address, shipping address, and payment method before paying.",
-        );
+        return Some("Add a billing address, shipping address, and payment method before paying.");
     }
     if !billing.iter().any(|a| a.id == form.billing_address_id) {
         return Some("Select a valid billing address.");

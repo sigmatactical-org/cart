@@ -17,7 +17,7 @@ mod test_support;
 mod web;
 
 use std::convert::Infallible;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use warp::Filter;
 use warp::Reply;
@@ -45,11 +45,7 @@ pub fn routes(
         web::routes(with_store(store.clone())).or(api::routes(with_store(store))),
         sigma_pg::health::warp::health_routes("cart", Some(health_pool)),
     );
-    // The header set is built once and shared by every reply, so the CSP's
-    // `connect-src` origin has to outlive the filter.
-    static IDENTITY_ORIGIN: OnceLock<String> = OnceLock::new();
-    let identity_origin = IDENTITY_ORIGIN.get_or_init(config::identity_public_origin);
-    sigma_theme::warp::security_headers(site, identity_origin)
+    sigma_theme::warp::security_headers(site, config::identity_public_origin())
 }
 
 #[cfg(test)]

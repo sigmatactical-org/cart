@@ -1,5 +1,6 @@
 /target
 /build
+# Generated: prepare-local.sh writes the patch config, build.rs the askama config
 /.cargo/config.toml
 /askama.toml
 /data

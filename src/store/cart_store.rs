@@ -35,12 +35,17 @@ impl CartStore {
         &self.pool
     }
 
+    /// The most recently touched carts, capped at
+    /// [`sigma_pg::list::LIST_LIMIT`] rows.
     pub async fn list(&self) -> Result<Vec<Cart>, StoreError> {
         let rows = sqlx::query(
-            "SELECT id, user_id, status, note, updated_at FROM cart.carts ORDER BY updated_at DESC",
+            "SELECT id, user_id, status, note, updated_at FROM cart.carts \
+             ORDER BY updated_at DESC LIMIT $1",
         )
+        .bind(sigma_pg::list::LIST_LIMIT)
         .fetch_all(&self.pool)
         .await?;
+        sigma_pg::list::warn_if_at_limit("carts", rows.len());
         self.rows_to_carts(rows).await
     }
 

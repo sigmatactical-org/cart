@@ -12,6 +12,7 @@ use std::convert::Infallible;
 use sigma_pg::clients::addresses::{self, AddressSummary};
 use sigma_pg::clients::orders::{self, CreateOrder, CreateOrderLine, OrderStatus};
 use sigma_pg::money::deposit_cents_for_price;
+use sigma_theme::warp::{internal_error, internal_rejection, see_other};
 use warp::http::StatusCode;
 use warp::http::header::{LOCATION, SET_COOKIE};
 use warp::reply::Response;
@@ -114,7 +115,7 @@ fn cart_view(
                 &prices.unwrap_or_default(),
             )
             .map(warp::reply::html)
-            .map_err(|_| warp::reject::not_found())
+            .map_err(|e| internal_rejection("render storefront cart page", e))
         })
 }
 
@@ -198,16 +199,23 @@ fn change_line(
                     return Ok::<_, Rejection>(redirect_to("/", None));
                 };
 
-                let current = store
-                    .get(&cart_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|c| c.lines.into_iter().find(|l| l.id == line_id));
-                let Some(line) = current else {
+                let cart = match store.get(&cart_id).await {
+                    Ok(cart) => cart,
+                    Err(e) => {
+                        tracing::error!("change_line: reading cart {cart_id} failed: {e}");
+                        return Ok(internal_error());
+                    }
+                };
+                // A cookie pointing at a cart that is gone, or a line that is
+                // already gone, is a stale page rather than an error: re-render
+                // and the shopper sees the current cart.
+                let Some(line) = cart
+                    .and_then(|c| c.lines.into_iter().find(|l| l.id == line_id))
+                else {
                     return Ok(redirect_to("/", None));
                 };
-                let _ = match action.as_str() {
+
+                let outcome = match action.as_str() {
                     "increment" => store
                         .update_line(
                             &cart_id,
@@ -229,8 +237,16 @@ fn change_line(
                         .await
                         .map(|_| ()),
                     "decrement" | "remove" => store.delete_line(&cart_id, &line_id).await,
-                    _ => Ok(()),
+                    // Only this service's own pages post here, so an unknown
+                    // action is a bad link rather than something to explain.
+                    _ => return Ok(redirect_to("/", None)),
                 };
+                // A write that failed must not look like it worked: the cart
+                // page would redisplay the old quantity with no explanation.
+                if let Err(e) = outcome {
+                    tracing::error!("change_line: {action} on line {line_id} failed: {e}");
+                    return Ok(internal_error());
+                }
                 Ok(redirect_to("/", None))
             },
         )
@@ -242,10 +258,7 @@ fn sign_in_redirect(return_path: &str) -> Response {
         &crate::config::public_base_url(),
         return_path,
     );
-    match warp::http::Uri::from_maybe_shared(links.sign_in_url) {
-        Ok(uri) => warp::redirect::see_other(uri).into_response(),
-        Err(_) => internal_server_error(),
-    }
+    see_other(&links.sign_in_url)
 }
 
 async fn require_checkout_session(cookie: Option<&str>) -> Result<CheckoutSession, Response> {
@@ -295,31 +308,70 @@ fn checkout_options<T: CheckoutChoice>(items: &[T], selected: Option<&str>) -> V
         .collect()
 }
 
-/// The shopper's saved billing/shipping addresses and payment methods, fetched
-/// concurrently. Each list degrades to empty (the page then explains why).
-async fn checkout_choices(
-    user_id: &str,
-) -> (
-    Vec<AddressSummary>,
-    Vec<AddressSummary>,
-    Vec<PaymentMethodSummary>,
-) {
-    let addresses_base = crate::config::addresses_internal_base_url();
-    let (billing, shipping, methods) = tokio::join!(
-        addresses::list_addresses(addresses_base.as_deref(), user_id, "billing"),
-        addresses::list_addresses(addresses_base.as_deref(), user_id, "shipping"),
-        payments_client::list_payment_methods(user_id),
-    );
-    (
-        unwrap_or_warn(billing, "billing addresses"),
-        unwrap_or_warn(shipping, "shipping addresses"),
-        unwrap_or_warn(methods, "payment methods"),
-    )
+/// What the shopper can pick from on the checkout form.
+struct CheckoutChoices {
+    billing: Vec<AddressSummary>,
+    shipping: Vec<AddressSummary>,
+    methods: Vec<PaymentMethodSummary>,
+    /// Whether any list is empty only because its service could not be reached.
+    ///
+    /// Worth tracking separately: an unreachable addresses service looks exactly
+    /// like a shopper with no saved addresses, and telling them to add one they
+    /// already have sends them off to fix nothing.
+    degraded: bool,
 }
 
-fn unwrap_or_warn<T, E: std::fmt::Display>(result: Result<Vec<T>, E>, what: &str) -> Vec<T> {
+impl CheckoutChoices {
+    /// The shopper's saved billing/shipping addresses and payment methods,
+    /// fetched concurrently. A list whose service fails comes back empty and
+    /// marks the whole set degraded.
+    async fn load(user_id: &str) -> Self {
+        let addresses_base = crate::config::addresses_internal_base_url();
+        let payments_base = crate::config::payments_internal_base_url();
+        let (billing, shipping, methods) = tokio::join!(
+            addresses::list_addresses(addresses_base.as_deref(), user_id, "billing"),
+            addresses::list_addresses(addresses_base.as_deref(), user_id, "shipping"),
+            payments_client::list_payment_methods(payments_base.as_deref(), user_id),
+        );
+        let mut degraded = false;
+        let (billing, shipping, methods) = (
+            unwrap_or_warn(billing, "billing addresses", &mut degraded),
+            unwrap_or_warn(shipping, "shipping addresses", &mut degraded),
+            unwrap_or_warn(methods, "payment methods", &mut degraded),
+        );
+        Self {
+            billing,
+            shipping,
+            methods,
+            degraded,
+        }
+    }
+
+    /// The notice to show above the form: empty unless a service is down, in
+    /// which case the shopper is told to come back rather than to add details
+    /// they may already have saved.
+    fn notice(&self) -> &'static str {
+        if self.degraded {
+            UNAVAILABLE_NOTICE
+        } else {
+            ""
+        }
+    }
+}
+
+/// Shown whenever checkout cannot see the shopper's saved addresses or payment
+/// methods, on both the form and a rejected submission.
+const UNAVAILABLE_NOTICE: &str =
+    "Checkout is temporarily unavailable. Please try again in a moment.";
+
+fn unwrap_or_warn<T, E: std::fmt::Display>(
+    result: Result<Vec<T>, E>,
+    what: &str,
+    degraded: &mut bool,
+) -> Vec<T> {
     result.unwrap_or_else(|e| {
         tracing::warn!("checkout: list {what} failed: {e}");
+        *degraded = true;
         Vec::new()
     })
 }
@@ -354,34 +406,49 @@ fn checkout_html_reply(
     error: &str,
 ) -> Result<Response, Rejection> {
     let html = templates::render_checkout_html(lines, billing, shipping, payment_methods, error)
-        .map_err(|_| warp::reject::not_found())?;
+        .map_err(|e| internal_rejection("render checkout page", e))?;
     Ok(warp::reply::html(html).into_response())
 }
 
 /// The first reason a submitted checkout form can't proceed to payment, or
 /// `None` when the terms are accepted and each selection names a real saved
 /// address or payment method.
-fn checkout_rejection(
-    form: &CheckoutForm,
-    billing: &[AddressSummary],
-    shipping: &[AddressSummary],
-    methods: &[PaymentMethodSummary],
-) -> Option<&'static str> {
-    if form.accept_terms.as_deref().is_none_or(|v| v.trim().is_empty()) {
+fn checkout_rejection(form: &CheckoutForm, choices: &CheckoutChoices) -> Option<&'static str> {
+    if form
+        .accept_terms
+        .as_deref()
+        .is_none_or(|v| v.trim().is_empty())
+    {
         return Some("Please accept the Terms and Conditions.");
     }
-    if billing.is_empty() || shipping.is_empty() || methods.is_empty() {
-        return Some(
-            "Add a billing address, shipping address, and payment method before paying.",
-        );
+    // Checked before the emptiness rules below: with a service down we cannot
+    // tell a shopper who has saved nothing from one whose details we simply
+    // cannot see.
+    if choices.degraded {
+        return Some(UNAVAILABLE_NOTICE);
     }
-    if !billing.iter().any(|a| a.id == form.billing_address_id) {
+    if choices.billing.is_empty() || choices.shipping.is_empty() || choices.methods.is_empty() {
+        return Some("Add a billing address, shipping address, and payment method before paying.");
+    }
+    if !choices
+        .billing
+        .iter()
+        .any(|a| a.id == form.billing_address_id)
+    {
         return Some("Select a valid billing address.");
     }
-    if !shipping.iter().any(|a| a.id == form.shipping_address_id) {
+    if !choices
+        .shipping
+        .iter()
+        .any(|a| a.id == form.shipping_address_id)
+    {
         return Some("Select a valid shipping address.");
     }
-    if !methods.iter().any(|m| m.id == form.payment_method_id) {
+    if !choices
+        .methods
+        .iter()
+        .any(|m| m.id == form.payment_method_id)
+    {
         return Some("Select a valid payment method.");
     }
     None
@@ -416,13 +483,13 @@ fn checkout_get(
                 return Ok(redirect_to("/", None));
             };
 
-            let (billing, shipping, methods) = checkout_choices(&session.user_id).await;
+            let choices = CheckoutChoices::load(&session.user_id).await;
             checkout_html_reply(
                 &lines,
-                checkout_options(&billing, None),
-                checkout_options(&shipping, None),
-                checkout_options(&methods, None),
-                "",
+                checkout_options(&choices.billing, None),
+                checkout_options(&choices.shipping, None),
+                checkout_options(&choices.methods, None),
+                choices.notice(),
             )
         })
 }
@@ -449,127 +516,304 @@ fn checkout_post(
                     return Ok(redirect_to("/", None));
                 };
 
-                let (billing, shipping, methods) = checkout_choices(&session.user_id).await;
+                let choices = CheckoutChoices::load(&session.user_id).await;
                 let redisplay = |error: &str| {
                     checkout_html_reply(
                         &lines,
-                        checkout_options(&billing, Some(form.billing_address_id.as_str())),
-                        checkout_options(&shipping, Some(form.shipping_address_id.as_str())),
-                        checkout_options(&methods, Some(form.payment_method_id.as_str())),
+                        checkout_options(&choices.billing, Some(form.billing_address_id.as_str())),
+                        checkout_options(
+                            &choices.shipping,
+                            Some(form.shipping_address_id.as_str()),
+                        ),
+                        checkout_options(&choices.methods, Some(form.payment_method_id.as_str())),
                         error,
                     )
                 };
 
-                if let Some(message) = checkout_rejection(&form, &billing, &shipping, &methods) {
+                if let Some(message) = checkout_rejection(&form, &choices) {
                     return redisplay(message);
                 }
 
-                let subtotal: u64 = lines
-                    .iter()
-                    .filter(|l| l.unit_price_cents > 0)
-                    .map(|l| l.unit_price_cents.saturating_mul(u64::from(l.quantity)))
-                    .sum();
-                let deposit = deposit_cents_for_price(subtotal);
-                if deposit == 0 {
+                let Some(totals) = CheckoutTotals::from_lines(&lines) else {
                     return Ok(redirect_to("/", None));
-                }
-
-                let charge = match payments_client::create_charge(
-                    &session.user_id,
-                    &form.payment_method_id,
-                    deposit,
-                    &cart_id,
-                )
-                .await
-                {
-                    Ok(charge) if charge.status == "succeeded" => charge,
-                    Ok(_) => return redisplay("Payment was declined. Try another method."),
-                    Err(payments_client::PaymentsClientError::Declined(reason)) => {
-                        return redisplay(&format!("Payment declined: {reason}"));
-                    }
-                    Err(e) => {
-                        tracing::warn!("checkout: charge failed: {e}");
-                        return redisplay("Payment failed. Please try again.");
-                    }
                 };
 
-                let order_lines: Vec<CreateOrderLine> = lines
-                    .iter()
-                    .filter(|l| l.unit_price_cents > 0)
-                    .map(|l| CreateOrderLine {
-                        sku_id: l.sku_id.clone(),
-                        sku_code: l.sku_code.clone(),
-                        name: l.name.clone(),
-                        quantity: l.quantity,
-                        unit_price_cents: l.unit_price_cents,
-                        line_total_cents: None,
-                        deposit_cents: None,
-                    })
-                    .collect();
-
-                let orders_base = crate::config::orders_base_url();
-                let order = match orders::create_order(
-                    orders_base.as_deref(),
-                    &CreateOrder {
-                        cart_id: cart_id.clone(),
-                        username: session.username.clone(),
-                        user_id: Some(session.user_id.clone()),
-                        lines: order_lines,
-                        id: None,
-                        status: Some(OrderStatus::DepositPaid),
-                        subtotal_cents: Some(subtotal),
-                        deposit_cents: Some(deposit),
-                        created_at: None,
-                        billing_address_id: Some(form.billing_address_id.clone()),
-                        shipping_address_id: Some(form.shipping_address_id.clone()),
-                        payment_method_id: Some(form.payment_method_id.clone()),
-                        charge_id: Some(charge.id.clone()),
-                        terms_accepted_at: Some(chrono::Utc::now().to_rfc3339()),
-                    },
-                )
-                .await
-                {
-                    Ok(order) => order,
-                    Err(e) => {
-                        tracing::error!(
-                            "checkout: order create failed after charge {}: {e}",
-                            charge.id
-                        );
-                        return redisplay(
-                            "Payment succeeded but order creation failed. Contact support with your cart id.",
-                        );
-                    }
-                };
-
-                // Best-effort: a paid checkout must never fail because
-                // accounting is down. Anything missed here is backfilled by
-                // accounting's reconcile against the payments charge log.
-                if let Err(e) = accounting_client::record_deposit_receipt(
-                    &session.user_id,
-                    &charge.id,
-                    &order.id,
-                    deposit,
-                )
-                .await
-                {
-                    tracing::warn!(
-                        "checkout: accounting receipt for charge {} failed: {e}",
-                        charge.id
-                    );
-                }
+                let services = CheckoutServices::from_config();
+                let order =
+                    match place_deposit_order(&services, &session, &cart_id, &lines, &form, totals)
+                        .await
+                    {
+                        Ok(order) => order,
+                        Err(message) => return redisplay(&message),
+                    };
 
                 if let Err(e) = store.set_status(&cart_id, CartStatus::Submitted).await {
                     tracing::warn!("cart submit after order {} failed: {e}", order.id);
                 }
 
                 let html = templates::render_reserved_html(&order)
-                    .map_err(|_| warp::reject::not_found())?;
-                Ok(
-                    warp::reply::with_header(warp::reply::html(html), SET_COOKIE, cart_cookie("", 0))
-                        .into_response(),
+                    .map_err(|e| internal_rejection("render reserved page", e))?;
+                Ok(warp::reply::with_header(
+                    warp::reply::html(html),
+                    SET_COOKIE,
+                    cart_cookie("", 0),
                 )
+                .into_response())
             },
         )
+}
+
+// ---------------------------------------------------------------------------
+// Checkout saga
+// ---------------------------------------------------------------------------
+
+/// Where the checkout saga's collaborators live, resolved from configuration
+/// once at the request boundary.
+///
+/// Passing these in rather than reading the environment inside each step keeps
+/// the saga testable: the tests below point it at stub services.
+struct CheckoutServices {
+    orders: Option<String>,
+    payments: Option<String>,
+    accounting: Option<String>,
+}
+
+impl CheckoutServices {
+    fn from_config() -> Self {
+        Self {
+            orders: crate::config::orders_base_url(),
+            payments: crate::config::payments_internal_base_url(),
+            accounting: crate::config::accounting_internal_base_url(),
+        }
+    }
+}
+
+/// What a checkout is worth: the priced subtotal and the deposit due now.
+struct CheckoutTotals {
+    subtotal_cents: u64,
+    deposit_cents: u64,
+}
+
+impl CheckoutTotals {
+    /// `None` when the cart carries no deposit -- nothing priced, or a subtotal
+    /// too small to deposit against -- so there is nothing to check out.
+    fn from_lines(lines: &[PricedLine]) -> Option<Self> {
+        let subtotal_cents: u64 = lines
+            .iter()
+            .filter(|l| l.unit_price_cents > 0)
+            .map(|l| l.unit_price_cents.saturating_mul(u64::from(l.quantity)))
+            .sum();
+        let deposit_cents = deposit_cents_for_price(subtotal_cents);
+        (deposit_cents > 0).then_some(Self {
+            subtotal_cents,
+            deposit_cents,
+        })
+    }
+}
+
+/// Turn a validated checkout form into a paid order: reserve the order, take
+/// the deposit, then commit the order.
+///
+/// The ordering is the point. The order is recorded `pending_deposit` *before*
+/// any money moves, so a deposit can never exist without a durable order to
+/// attach it to -- the failure that used to leave a shopper charged with
+/// nothing to show for it. Each step is keyed so a retry replays rather than
+/// duplicates: the order by cart id, the charge by order id.
+///
+/// # Errors
+///
+/// The message to show the shopper. Failures before the charge leave a
+/// `pending_deposit` order that the next attempt reuses; a charge that cannot
+/// be committed is refunded.
+async fn place_deposit_order(
+    services: &CheckoutServices,
+    session: &CheckoutSession,
+    cart_id: &str,
+    lines: &[PricedLine],
+    form: &CheckoutForm,
+    totals: CheckoutTotals,
+) -> Result<orders::Order, String> {
+    let orders_base = services.orders.as_deref();
+    let order = reserve_pending_order(orders_base, session, cart_id, lines, form, &totals).await?;
+
+    match order.status {
+        OrderStatus::PendingDeposit => {}
+        // The deposit already landed: a double submit, or a browser retrying a
+        // response it never received. Show the order rather than charging again.
+        OrderStatus::DepositPaid | OrderStatus::InBuild | OrderStatus::Shipped => return Ok(order),
+        OrderStatus::Cancelled => {
+            return Err("This order was cancelled. Please start a new cart.".to_string());
+        }
+    }
+
+    let charge = charge_deposit(
+        services.payments.as_deref(),
+        session,
+        form,
+        &order.id,
+        totals.deposit_cents,
+    )
+    .await?;
+
+    // Committing the order is the first step that happens after money moves, so
+    // it is the one that must compensate: a deposit we cannot attach to an
+    // order is refunded rather than left stranded.
+    match orders::mark_deposit_paid(orders_base, &order.id, &charge.id).await {
+        Ok(paid) => {
+            record_deposit_receipt(
+                services.accounting.as_deref(),
+                session,
+                &charge.id,
+                &paid.id,
+                totals.deposit_cents,
+            )
+            .await;
+            Ok(paid)
+        }
+        Err(e) => {
+            tracing::error!(
+                "checkout: committing order {} after charge {} failed: {e}",
+                order.id,
+                charge.id
+            );
+            Err(refund_stranded_deposit(services.payments.as_deref(), &charge.id).await)
+        }
+    }
+}
+
+/// Record the order awaiting its deposit. Idempotent on the orders side per
+/// cart, so a shopper who resubmits gets the same order back -- which is what
+/// makes the charge below idempotent too, since it keys on the order id.
+async fn reserve_pending_order(
+    orders_base: Option<&str>,
+    session: &CheckoutSession,
+    cart_id: &str,
+    lines: &[PricedLine],
+    form: &CheckoutForm,
+    totals: &CheckoutTotals,
+) -> Result<orders::Order, String> {
+    let order_lines: Vec<CreateOrderLine> = lines
+        .iter()
+        .filter(|l| l.unit_price_cents > 0)
+        .map(|l| CreateOrderLine {
+            sku_id: l.sku_id.clone(),
+            sku_code: l.sku_code.clone(),
+            name: l.name.clone(),
+            quantity: l.quantity,
+            unit_price_cents: l.unit_price_cents,
+            line_total_cents: None,
+            deposit_cents: None,
+        })
+        .collect();
+
+    orders::create_order(
+        orders_base,
+        &CreateOrder {
+            cart_id: cart_id.to_string(),
+            username: session.username.clone(),
+            user_id: Some(session.user_id.clone()),
+            lines: order_lines,
+            id: None,
+            status: Some(OrderStatus::PendingDeposit),
+            subtotal_cents: Some(totals.subtotal_cents),
+            deposit_cents: Some(totals.deposit_cents),
+            created_at: None,
+            billing_address_id: Some(form.billing_address_id.clone()),
+            shipping_address_id: Some(form.shipping_address_id.clone()),
+            payment_method_id: Some(form.payment_method_id.clone()),
+            // Attached by `mark_deposit_paid` once a charge succeeds.
+            charge_id: None,
+            terms_accepted_at: Some(chrono::Utc::now().to_rfc3339()),
+        },
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("checkout: reserving order for cart {cart_id} failed: {e}");
+        "We could not start your order. Please try again.".to_string()
+    })
+}
+
+/// Charge the deposit against the shopper's saved payment method.
+///
+/// `order_id` is the payment reference: payments collapses a repeat charge for
+/// the same reference onto the original, so a retried checkout cannot take a
+/// second deposit.
+async fn charge_deposit(
+    payments_base: Option<&str>,
+    session: &CheckoutSession,
+    form: &CheckoutForm,
+    order_id: &str,
+    deposit_cents: u64,
+) -> Result<payments_client::Charge, String> {
+    match payments_client::create_charge(
+        payments_base,
+        &session.user_id,
+        &form.payment_method_id,
+        deposit_cents,
+        order_id,
+    )
+    .await
+    {
+        Ok(charge) if charge.status == "succeeded" => Ok(charge),
+        Ok(_) => Err("Payment was declined. Try another method.".to_string()),
+        Err(payments_client::PaymentsClientError::Declined(reason)) => {
+            Err(format!("Payment declined: {reason}"))
+        }
+        Err(e) => {
+            tracing::warn!("checkout: charging order {order_id} failed: {e}");
+            Err("Payment failed. Please try again.".to_string())
+        }
+    }
+}
+
+/// Reverse a deposit that could not be attached to its order, and return the
+/// message to show the shopper.
+///
+/// If the reversal itself fails there is money held against an order that will
+/// never ship, so the message carries the charge id: that is the one case where
+/// support has to intervene.
+async fn refund_stranded_deposit(payments_base: Option<&str>, charge_id: &str) -> String {
+    match payments_client::refund_charge(
+        payments_base,
+        charge_id,
+        "checkout could not be completed",
+    )
+    .await
+    {
+        Ok(()) => {
+            "We could not complete your order, so your deposit has been returned. Please try again."
+                .to_string()
+        }
+        Err(e) => {
+            tracing::error!("checkout: refunding stranded charge {charge_id} failed: {e}");
+            format!(
+                "We could not complete your order. Please contact support quoting payment {charge_id}."
+            )
+        }
+    }
+}
+
+/// Best-effort: a paid checkout must never fail because accounting is down.
+/// Anything missed here is backfilled by accounting's reconcile against the
+/// payments charge log.
+async fn record_deposit_receipt(
+    accounting_base: Option<&str>,
+    session: &CheckoutSession,
+    charge_id: &str,
+    order_id: &str,
+    deposit_cents: u64,
+) {
+    if let Err(e) = accounting_client::record_deposit_receipt(
+        accounting_base,
+        &session.user_id,
+        charge_id,
+        order_id,
+        deposit_cents,
+    )
+    .await
+    {
+        tracing::warn!("checkout: accounting receipt for charge {charge_id} failed: {e}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -586,7 +830,7 @@ fn admin_index(
         .and_then(|store: SharedStore| async move {
             let (carts, catalog_result, identity_result) =
                 tokio::join!(store.list(), catalog::fetch_skus(), identity::fetch_users());
-            let carts = carts.map_err(|_| warp::reject::not_found())?;
+            let carts = carts.map_err(|e| internal_rejection("list carts", e))?;
             let catalog_error = catalog_result.err().map(|e| e.to_string());
             let (identity_users, identity_error) = match identity_result {
                 Ok(users) => (users, None),
@@ -607,7 +851,7 @@ fn admin_index(
                 },
             )
             .map(warp::reply::html)
-            .map_err(|_| warp::reject::not_found())
+            .map_err(|e| internal_rejection("render admin index", e))
         })
 }
 
@@ -624,7 +868,7 @@ fn admin_new_cart()
                 CartFormValues::for_cart(None),
             )
             .map(warp::reply::html)
-            .map_err(|_| warp::reject::not_found())
+            .map_err(|e| internal_rejection("render cart form", e))
         })
 }
 
@@ -655,7 +899,7 @@ fn admin_create_cart(
                         )
                     } else {
                         match store.create(input).await {
-                            Ok(cart) => redirect(format!("/admin/carts/{}", cart.id)),
+                            Ok(cart) => see_other(&format!("/admin/carts/{}", cart.id)),
                             Err(e) => render_cart_form_error(&identity_users, values, e),
                         }
                     }
@@ -676,7 +920,7 @@ fn admin_cart_detail(
             let Some(cart) = store
                 .get(&id)
                 .await
-                .map_err(|_| warp::reject::not_found())?
+                .map_err(|e| internal_rejection("read cart", e))?
             else {
                 return Err(warp::reject::not_found());
             };
@@ -692,7 +936,7 @@ fn admin_cart_detail(
                 LineFormValues::default(),
             )
             .map(warp::reply::html)
-            .map_err(|_| warp::reject::not_found())
+            .map_err(|e| internal_rejection("render cart detail", e))
         })
 }
 
@@ -721,7 +965,7 @@ fn admin_update_cart(
                         } else {
                             match store.update(&id, input).await {
                                 Ok(cart) => {
-                                    return Ok::<_, Rejection>(redirect(format!(
+                                    return Ok::<_, Rejection>(see_other(&format!(
                                         "/admin/carts/{}",
                                         cart.id
                                     )));
@@ -760,7 +1004,7 @@ fn admin_add_line(
                         } else {
                             match store.add_line(&cart_id, input).await {
                                 Ok(_) => {
-                                    return Ok::<_, Rejection>(redirect(format!(
+                                    return Ok::<_, Rejection>(see_other(&format!(
                                         "/admin/carts/{cart_id}"
                                     )));
                                 }
@@ -787,7 +1031,7 @@ fn admin_delete_line(
         .and_then(
             |cart_id: String, line_id: String, store: SharedStore| async move {
                 match store.delete_line(&cart_id, &line_id).await {
-                    Ok(()) => Ok(redirect(format!("/admin/carts/{cart_id}"))),
+                    Ok(()) => Ok(see_other(&format!("/admin/carts/{cart_id}"))),
                     Err(StoreError::CartNotFound | StoreError::LineNotFound) => {
                         Err(warp::reject::not_found())
                     }
@@ -812,13 +1056,13 @@ fn admin_delete_cart(
         .and(store)
         .and_then(|id: String, store: SharedStore| async move {
             match store.delete(&id).await {
-                Ok(()) => Ok(redirect("/admin".to_string())),
+                Ok(()) => Ok(see_other("/admin")),
                 Err(StoreError::CartNotFound) => Err(warp::reject::not_found()),
                 // Only the failure path needs the cart and user lists.
                 Err(e) => {
                     let (carts, identity_users) =
                         tokio::join!(store.list(), identity::fetch_users());
-                    let carts = carts.map_err(|_| warp::reject::not_found())?;
+                    let carts = carts.map_err(|e| internal_rejection("list carts", e))?;
                     templates::render_index_html(
                         carts,
                         IndexContext {
@@ -831,7 +1075,7 @@ fn admin_delete_cart(
                         },
                     )
                     .map(|html| warp::reply::html(html).into_response())
-                    .map_err(|_| warp::reject::not_found())
+                    .map_err(|e| internal_rejection("render admin index", e))
                 }
             }
         })
@@ -841,24 +1085,13 @@ fn admin_delete_cart(
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-fn redirect(location: String) -> Response {
-    match warp::http::Uri::from_maybe_shared(location) {
-        Ok(uri) => warp::redirect::redirect(uri).into_response(),
-        Err(_) => internal_server_error(),
-    }
-}
-
-fn internal_server_error() -> Response {
-    warp::reply::with_status(warp::reply(), StatusCode::INTERNAL_SERVER_ERROR).into_response()
-}
-
 /// A rendered admin page is a 400 (the form is redisplayed with its error); a
 /// render failure is a 500.
 fn html_or_500(html: Result<String, askama::Error>) -> Response {
     match html {
         Ok(html) => warp::reply::with_status(warp::reply::html(html), StatusCode::BAD_REQUEST)
             .into_response(),
-        Err(_) => internal_server_error(),
+        Err(_) => internal_error(),
     }
 }
 
@@ -948,4 +1181,355 @@ async fn render_detail_line_error(
         cart_values,
         line_values,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    /// How the stub orders and payments services behave for one attempt.
+    #[derive(Clone, Copy)]
+    struct StubBehavior {
+        /// Status the reserved order comes back with. Anything other than
+        /// `PendingDeposit` stands in for a checkout that already ran once.
+        reserved_status: OrderStatus,
+        reserve_fails: bool,
+        charge_declined: bool,
+        commit_fails: bool,
+        refund_fails: bool,
+    }
+
+    impl Default for StubBehavior {
+        fn default() -> Self {
+            Self {
+                reserved_status: OrderStatus::PendingDeposit,
+                reserve_fails: false,
+                charge_declined: false,
+                commit_fails: false,
+                refund_fails: false,
+            }
+        }
+    }
+
+    /// What the stub services were actually asked to do.
+    #[derive(Default)]
+    struct StubCalls {
+        reserved: usize,
+        /// Payment reference of each charge attempt.
+        charged: Vec<String>,
+        /// Charge id passed to each order commit.
+        committed: Vec<String>,
+        /// Charge id of each refund.
+        refunded: Vec<String>,
+        receipts: usize,
+    }
+
+    struct Stub {
+        behavior: StubBehavior,
+        calls: Mutex<StubCalls>,
+    }
+
+    const ORDER_ID: &str = "order-1";
+    const CHARGE_ID: &str = "charge-1";
+
+    fn stub_order(status: OrderStatus, charge_id: Option<&str>) -> orders::Order {
+        orders::Order {
+            id: ORDER_ID.to_string(),
+            cart_id: "cart-1".to_string(),
+            username: "shopper".to_string(),
+            user_id: Some("user-1".to_string()),
+            lines: vec![orders::OrderLine {
+                sku_id: "sku-1".to_string(),
+                sku_code: "SIGMA-RACER".to_string(),
+                name: "Sigma Racer".to_string(),
+                quantity: 1,
+                unit_price_cents: 350_000,
+                line_total_cents: 350_000,
+                deposit_cents: 35_000,
+            }],
+            subtotal_cents: 350_000,
+            deposit_cents: 35_000,
+            status,
+            billing_address_id: Some("addr-b".to_string()),
+            shipping_address_id: Some("addr-s".to_string()),
+            payment_method_id: Some("pm-1".to_string()),
+            charge_id: charge_id.map(str::to_string),
+            terms_accepted_at: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    fn json_status(status: StatusCode, body: &Value) -> Response {
+        warp::reply::with_status(warp::reply::json(body), status).into_response()
+    }
+
+    /// The orders, payments, and accounting endpoints the saga calls, standing
+    /// in for the three services.
+    fn stub_routes(
+        stub: Arc<Stub>,
+    ) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone + Send + Sync + 'static
+    {
+        let reserve_stub = stub.clone();
+        let reserve = warp::path!("orders")
+            .and(warp::post())
+            .and(warp::body::json())
+            .map(move |_body: Value| {
+                reserve_stub.calls.lock().unwrap().reserved += 1;
+                if reserve_stub.behavior.reserve_fails {
+                    return json_status(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &json!({ "error": "orders unavailable" }),
+                    );
+                }
+                warp::reply::json(&stub_order(reserve_stub.behavior.reserved_status, None))
+                    .into_response()
+            });
+
+        let commit_stub = stub.clone();
+        let commit = warp::path!("orders" / String / "deposit-paid")
+            .and(warp::post())
+            .and(warp::body::json())
+            .map(move |_id: String, body: Value| {
+                let charge_id = body["charge_id"].as_str().unwrap_or_default().to_string();
+                commit_stub.calls.lock().unwrap().committed.push(charge_id);
+                if commit_stub.behavior.commit_fails {
+                    return json_status(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &json!({ "error": "orders unavailable" }),
+                    );
+                }
+                warp::reply::json(&stub_order(OrderStatus::DepositPaid, Some(CHARGE_ID)))
+                    .into_response()
+            });
+
+        let charge_stub = stub.clone();
+        let charge = warp::path!("api" / "charges")
+            .and(warp::post())
+            .and(warp::body::json())
+            .map(move |body: Value| {
+                let reference = body["reference"].as_str().unwrap_or_default().to_string();
+                charge_stub.calls.lock().unwrap().charged.push(reference);
+                if charge_stub.behavior.charge_declined {
+                    return json_status(
+                        StatusCode::PAYMENT_REQUIRED,
+                        &json!({
+                            "id": CHARGE_ID,
+                            "status": "failed",
+                            "failure_reason": "insufficient funds",
+                        }),
+                    );
+                }
+                json_status(
+                    StatusCode::CREATED,
+                    &json!({ "id": CHARGE_ID, "status": "succeeded" }),
+                )
+            });
+
+        let refund_stub = stub.clone();
+        let refund = warp::path!("api" / "charges" / String / "refund")
+            .and(warp::post())
+            .and(warp::body::json())
+            .map(move |charge_id: String, _body: Value| {
+                refund_stub.calls.lock().unwrap().refunded.push(charge_id);
+                if refund_stub.behavior.refund_fails {
+                    return json_status(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &json!({ "error": "payments unavailable" }),
+                    );
+                }
+                json_status(StatusCode::CREATED, &json!({ "id": "refund-1" }))
+            });
+
+        let receipt = warp::path!("receipts")
+            .and(warp::post())
+            .and(warp::body::json())
+            .map(move |_body: Value| {
+                stub.calls.lock().unwrap().receipts += 1;
+                json_status(StatusCode::CREATED, &json!({ "id": "receipt-1" }))
+            });
+
+        reserve.or(commit).or(charge).or(refund).or(receipt)
+    }
+
+    fn checkout_line() -> PricedLine {
+        PricedLine {
+            line_id: "line-1".to_string(),
+            sku_id: "sku-1".to_string(),
+            sku_code: "SIGMA-RACER".to_string(),
+            name: "Sigma Racer".to_string(),
+            quantity: 1,
+            unit_price_cents: 350_000,
+            in_catalog: true,
+        }
+    }
+
+    /// Run one checkout against stub services behaving as described, returning
+    /// its outcome alongside every call the stubs saw.
+    async fn checkout_against_stubs(
+        behavior: StubBehavior,
+    ) -> (Result<orders::Order, String>, StubCalls) {
+        let stub = Arc::new(Stub {
+            behavior,
+            calls: Mutex::new(StubCalls::default()),
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind stub services");
+        let base = format!("http://{}/", listener.local_addr().expect("stub address"));
+        tokio::spawn(
+            warp::serve(stub_routes(Arc::clone(&stub)))
+                .incoming(listener)
+                .run(),
+        );
+
+        let services = CheckoutServices {
+            orders: Some(base.clone()),
+            payments: Some(base.clone()),
+            accounting: Some(base),
+        };
+        let session = CheckoutSession {
+            user_id: "user-1".to_string(),
+            username: "shopper".to_string(),
+        };
+        let form = CheckoutForm {
+            billing_address_id: "addr-b".to_string(),
+            shipping_address_id: "addr-s".to_string(),
+            payment_method_id: "pm-1".to_string(),
+            accept_terms: Some("on".to_string()),
+        };
+        let lines = vec![checkout_line()];
+        let totals = CheckoutTotals::from_lines(&lines).expect("priced cart");
+
+        let outcome =
+            place_deposit_order(&services, &session, "cart-1", &lines, &form, totals).await;
+        let calls = std::mem::take(&mut *stub.calls.lock().unwrap());
+        (outcome, calls)
+    }
+
+    #[tokio::test]
+    async fn a_checkout_reserves_the_order_before_taking_the_deposit() {
+        let (outcome, calls) = checkout_against_stubs(StubBehavior::default()).await;
+
+        let order = outcome.expect("checkout completes");
+        assert_eq!(order.status, OrderStatus::DepositPaid);
+        assert_eq!(order.charge_id.as_deref(), Some(CHARGE_ID));
+        assert_eq!(calls.reserved, 1);
+        // The charge is keyed on the order, which is what makes a retry a replay
+        // rather than a second deposit.
+        assert_eq!(calls.charged, [ORDER_ID]);
+        assert_eq!(calls.committed, [CHARGE_ID]);
+        assert!(calls.refunded.is_empty());
+        assert_eq!(calls.receipts, 1);
+    }
+
+    #[tokio::test]
+    async fn no_money_moves_when_the_order_cannot_be_reserved() {
+        let (outcome, calls) = checkout_against_stubs(StubBehavior {
+            reserve_fails: true,
+            ..StubBehavior::default()
+        })
+        .await;
+
+        assert!(outcome.is_err());
+        assert!(
+            calls.charged.is_empty(),
+            "a shopper must never be charged before the order exists"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resubmitted_checkout_is_not_charged_twice() {
+        let (outcome, calls) = checkout_against_stubs(StubBehavior {
+            reserved_status: OrderStatus::DepositPaid,
+            ..StubBehavior::default()
+        })
+        .await;
+
+        let order = outcome.expect("the paid order is shown again");
+        assert_eq!(order.status, OrderStatus::DepositPaid);
+        assert!(calls.charged.is_empty());
+        assert!(calls.committed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_declined_card_leaves_the_order_awaiting_its_deposit() {
+        let (outcome, calls) = checkout_against_stubs(StubBehavior {
+            charge_declined: true,
+            ..StubBehavior::default()
+        })
+        .await;
+
+        let message = outcome.expect_err("a declined card cannot complete checkout");
+        assert!(message.contains("declined"), "got {message:?}");
+        // Nothing to compensate: the reserved order simply stays unpaid and the
+        // next attempt reuses it.
+        assert!(calls.committed.is_empty());
+        assert!(calls.refunded.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_deposit_that_cannot_be_committed_is_refunded() {
+        let (outcome, calls) = checkout_against_stubs(StubBehavior {
+            commit_fails: true,
+            ..StubBehavior::default()
+        })
+        .await;
+
+        let message = outcome.expect_err("an uncommittable order cannot complete checkout");
+        assert!(message.contains("returned"), "got {message:?}");
+        assert_eq!(calls.refunded, [CHARGE_ID]);
+        assert_eq!(
+            calls.receipts, 0,
+            "a refunded deposit must not be booked as revenue"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deposit_that_cannot_be_refunded_names_the_payment() {
+        let (outcome, _) = checkout_against_stubs(StubBehavior {
+            commit_fails: true,
+            refund_fails: true,
+            ..StubBehavior::default()
+        })
+        .await;
+
+        let message = outcome.expect_err("checkout cannot complete");
+        assert!(
+            message.contains(CHARGE_ID),
+            "support needs the payment id: {message:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_order_is_not_charged() {
+        let (outcome, calls) = checkout_against_stubs(StubBehavior {
+            reserved_status: OrderStatus::Cancelled,
+            ..StubBehavior::default()
+        })
+        .await;
+
+        assert!(outcome.is_err());
+        assert!(calls.charged.is_empty());
+    }
+
+    #[test]
+    fn totals_ignore_unpriced_lines_and_reject_an_empty_deposit() {
+        let mut unpriced = checkout_line();
+        unpriced.unit_price_cents = 0;
+        assert!(CheckoutTotals::from_lines(&[unpriced]).is_none());
+
+        let mut two = checkout_line();
+        two.quantity = 2;
+        let totals = CheckoutTotals::from_lines(&[two]).expect("priced cart");
+        assert_eq!(totals.subtotal_cents, 700_000);
+        assert_eq!(
+            totals.deposit_cents,
+            deposit_cents_for_price(totals.subtotal_cents)
+        );
+    }
 }

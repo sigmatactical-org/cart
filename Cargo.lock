@@ -1762,7 +1762,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sigma-config",
+ "sigma-config 0.1.0 (git+https://github.com/sigmatactical-org/config.git?rev=e66ad4ed16f248b7235c149bec8bba279c7414d2)",
  "sigma-identity-nav",
  "sigma-pg",
  "sigma-theme",
@@ -1783,30 +1783,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "sigma-cart-nav"
+version = "0.1.0"
+source = "git+https://github.com/sigmatactical-org/cart.git?rev=c56f32184c53410b5e9121b527d168ec60e10f3b#c56f32184c53410b5e9121b527d168ec60e10f3b"
+dependencies = [
+ "askama",
+]
+
+[[package]]
 name = "sigma-config"
 version = "0.1.0"
+source = "git+https://github.com/sigmatactical-org/config.git?rev=551ccb7957c34a440e5c5e95a78b738c1c62a932#551ccb7957c34a440e5c5e95a78b738c1c62a932"
+
+[[package]]
+name = "sigma-config"
+version = "0.1.0"
+source = "git+https://github.com/sigmatactical-org/config.git?rev=e66ad4ed16f248b7235c149bec8bba279c7414d2#e66ad4ed16f248b7235c149bec8bba279c7414d2"
 
 [[package]]
 name = "sigma-contact-nav"
 version = "0.1.0"
+source = "git+https://github.com/sigmatactical-org/contact.git?rev=877a1a5fdf4cf87721298159c5050d2205d35f47#877a1a5fdf4cf87721298159c5050d2205d35f47"
 dependencies = [
  "askama",
- "sigma-config",
+ "sigma-config 0.1.0 (git+https://github.com/sigmatactical-org/config.git?rev=551ccb7957c34a440e5c5e95a78b738c1c62a932)",
  "urlencoding",
 ]
 
 [[package]]
 name = "sigma-identity-nav"
 version = "0.1.0"
+source = "git+https://github.com/sigmatactical-org/identity.git?rev=46fefdb6507caa13fdb347e36952fee1ce4cd0d8#46fefdb6507caa13fdb347e36952fee1ce4cd0d8"
 dependencies = [
  "askama",
- "sigma-config",
+ "sigma-config 0.1.0 (git+https://github.com/sigmatactical-org/config.git?rev=551ccb7957c34a440e5c5e95a78b738c1c62a932)",
  "urlencoding",
 ]
 
 [[package]]
 name = "sigma-pg"
 version = "0.1.0"
+source = "git+https://github.com/sigmatactical-org/sigma-pg.git?rev=2b20d1d5d5daab1771fce238946037fdde43c907#2b20d1d5d5daab1771fce238946037fdde43c907"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1823,11 +1840,12 @@ dependencies = [
 [[package]]
 name = "sigma-theme"
 version = "0.1.0"
+source = "git+https://github.com/sigmatactical-org/sigma-theme.git?rev=1b5254c46e3b6e5f271116fc61f746ca9f180612#1b5254c46e3b6e5f271116fc61f746ca9f180612"
 dependencies = [
  "askama",
  "mime_guess",
  "rust-embed",
- "sigma-cart-nav",
+ "sigma-cart-nav 0.1.0 (git+https://github.com/sigmatactical-org/cart.git?rev=c56f32184c53410b5e9121b527d168ec60e10f3b)",
  "sigma-contact-nav",
  "sigma-identity-nav",
  "tokio",

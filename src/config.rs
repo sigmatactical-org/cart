@@ -1,36 +1,40 @@
-//! Environment-driven configuration, read once per process.
+//! Environment-driven configuration (service URLs, optional integrations).
+//!
+//! Required values are declared in the [`sigma_config::service!`] block and
+//! checked by [`validate_with`] at startup; optional integrations return
+//! `None` when they are not configured for this environment.
 
-use std::sync::OnceLock;
-
-use sigma_pg::clients::http::{env_url, normalize_base_url};
-
-fn cached(cell: &'static OnceLock<String>, init: impl FnOnce() -> String) -> String {
-    cell.get_or_init(init).clone()
+sigma_config::service! {
+    prefix = "CART";
+    role = "cart";
+    urls {
+        /// Canonical public URL of this cart service.
+        public_base_url = "PUBLIC_BASE_URL" => "http://127.0.0.1:8084/";
+        /// Public base URL of the identity BFF.
+        identity_public_base_url = "IDENTITY_PUBLIC_URL" => "http://127.0.0.1:3000/";
+        /// Public base URL of the contact service for the cart navbar link.
+        contact_public_base_url = "CONTACT_PUBLIC_URL" => "http://127.0.0.1:8083/";
+        /// Public base URL of the store for product links and continue-shopping navigation.
+        store_public_base_url = "STORE_PUBLIC_URL" => "http://127.0.0.1:8082/";
+        /// Public addresses URL for “add address” links on checkout.
+        addresses_public_base_url = "ADDRESSES_PUBLIC_URL" => "http://127.0.0.1:8089/";
+        /// Public payments URL for “add payment method” links on checkout.
+        payments_public_base_url = "PAYMENTS_PUBLIC_URL" => "http://127.0.0.1:8090/";
+        /// Public info site URL for Terms and Conditions (`/doc/terms`).
+        info_public_base_url = "INFO_PUBLIC_URL" => "http://127.0.0.1:8085/";
+    }
 }
 
-fn cached_opt(
-    cell: &'static OnceLock<Option<String>>,
-    init: impl FnOnce() -> Option<String>,
-) -> Option<String> {
-    cell.get_or_init(init).clone()
-}
-
-fn env_opt(var: &str) -> Option<String> {
-    std::env::var(var)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn env_opt_url(var: &str) -> Option<String> {
-    env_opt(var).map(|s| normalize_base_url(&s))
+/// Browser origin of the identity BFF for CSP `connect-src` (no trailing slash).
+#[must_use]
+pub fn identity_public_origin() -> String {
+    sigma_config::origin_of(&identity_public_base_url())
 }
 
 /// Base URL of the catalog service (e.g. `http://127.0.0.1:8081/`).
 #[must_use]
 pub fn catalog_base_url() -> Option<String> {
-    static CELL: OnceLock<Option<String>> = OnceLock::new();
-    cached_opt(&CELL, || env_opt_url("CART_CATALOG_BASE_URL"))
+    SERVICE.opt_url("CATALOG_BASE_URL")
 }
 
 /// Whether catalog integration is configured.
@@ -44,32 +48,7 @@ pub fn catalog_configured() -> bool {
 /// catalog, so the cart reads them from the store's `/items` endpoint.
 #[must_use]
 pub fn store_base_url() -> Option<String> {
-    static CELL: OnceLock<Option<String>> = OnceLock::new();
-    cached_opt(&CELL, || env_opt_url("CART_STORE_BASE_URL"))
-}
-
-/// Canonical public URL of this cart service (e.g. `http://127.0.0.1:8084/`).
-#[must_use]
-pub fn public_base_url() -> String {
-    static CELL: OnceLock<String> = OnceLock::new();
-    cached(&CELL, || {
-        env_url("CART_PUBLIC_BASE_URL", "http://127.0.0.1:8084/")
-    })
-}
-
-/// Public base URL of the identity BFF (e.g. `http://127.0.0.1:3000/`).
-#[must_use]
-pub fn identity_public_base_url() -> String {
-    static CELL: OnceLock<String> = OnceLock::new();
-    cached(&CELL, || {
-        env_url("CART_IDENTITY_PUBLIC_URL", "http://127.0.0.1:3000/")
-    })
-}
-
-/// Browser origin of the identity BFF for CSP `connect-src` (no trailing slash).
-#[must_use]
-pub fn identity_public_origin() -> String {
-    identity_public_base_url().trim_end_matches('/').to_string()
+    SERVICE.opt_url("STORE_BASE_URL")
 }
 
 /// Base URL for server-to-server calls to the identity BFF (e.g. session
@@ -79,84 +58,34 @@ pub fn identity_public_origin() -> String {
 /// Falls back to the public URL for non-cluster local dev.
 #[must_use]
 pub fn identity_internal_base_url() -> String {
-    static CELL: OnceLock<String> = OnceLock::new();
-    cached(&CELL, || {
-        env_opt_url("CART_IDENTITY_INTERNAL_URL").unwrap_or_else(identity_public_base_url)
-    })
-}
-
-/// Public base URL of the contact service for the cart navbar link.
-#[must_use]
-pub fn contact_public_base_url() -> String {
-    static CELL: OnceLock<String> = OnceLock::new();
-    cached(&CELL, || {
-        env_url("CART_CONTACT_PUBLIC_URL", "http://127.0.0.1:8083/")
-    })
-}
-
-/// Public base URL of the store for product links and continue-shopping navigation.
-#[must_use]
-pub fn store_public_base_url() -> String {
-    static CELL: OnceLock<String> = OnceLock::new();
-    cached(&CELL, || {
-        env_url("CART_STORE_PUBLIC_URL", "http://127.0.0.1:8082/")
-    })
+    SERVICE
+        .opt_url("IDENTITY_INTERNAL_URL")
+        .unwrap_or_else(identity_public_base_url)
 }
 
 /// Base URL of the orders service (e.g. `http://127.0.0.1:8085/`).
 #[must_use]
 pub fn orders_base_url() -> Option<String> {
-    static CELL: OnceLock<Option<String>> = OnceLock::new();
-    cached_opt(&CELL, || env_opt_url("CART_ORDERS_BASE_URL"))
+    SERVICE.opt_url("ORDERS_BASE_URL")
 }
 
 /// Cluster-internal addresses service URL for checkout address lists.
 #[must_use]
 pub fn addresses_internal_base_url() -> Option<String> {
-    static CELL: OnceLock<Option<String>> = OnceLock::new();
-    cached_opt(&CELL, || env_opt_url("CART_ADDRESSES_INTERNAL_URL"))
-}
-
-/// Public addresses URL for “add address” links on checkout.
-#[must_use]
-pub fn addresses_public_base_url() -> String {
-    static CELL: OnceLock<String> = OnceLock::new();
-    cached(&CELL, || {
-        env_url("CART_ADDRESSES_PUBLIC_URL", "http://127.0.0.1:8089/")
-    })
+    SERVICE.opt_url("ADDRESSES_INTERNAL_URL")
 }
 
 /// Cluster-internal accounting service URL for recording checkout deposit
 /// receipts. Unset skips the receipt push entirely.
 #[must_use]
 pub fn accounting_internal_base_url() -> Option<String> {
-    static CELL: OnceLock<Option<String>> = OnceLock::new();
-    cached_opt(&CELL, || env_opt_url("CART_ACCOUNTING_INTERNAL_URL"))
+    SERVICE.opt_url("ACCOUNTING_INTERNAL_URL")
 }
 
 /// Cluster-internal payments service URL for methods + charges.
 #[must_use]
 pub fn payments_internal_base_url() -> Option<String> {
-    static CELL: OnceLock<Option<String>> = OnceLock::new();
-    cached_opt(&CELL, || env_opt_url("CART_PAYMENTS_INTERNAL_URL"))
-}
-
-/// Public payments URL for “add payment method” links on checkout.
-#[must_use]
-pub fn payments_public_base_url() -> String {
-    static CELL: OnceLock<String> = OnceLock::new();
-    cached(&CELL, || {
-        env_url("CART_PAYMENTS_PUBLIC_URL", "http://127.0.0.1:8090/")
-    })
-}
-
-/// Public info site URL for Terms and Conditions (`/doc/terms`).
-#[must_use]
-pub fn info_public_base_url() -> String {
-    static CELL: OnceLock<String> = OnceLock::new();
-    cached(&CELL, || {
-        env_url("CART_INFO_PUBLIC_URL", "http://127.0.0.1:8085/")
-    })
+    SERVICE.opt_url("PAYMENTS_INTERNAL_URL")
 }
 
 #[must_use]
@@ -179,29 +108,25 @@ pub fn store_product_url(sku_code: &str) -> String {
 /// in local development, where all apps share `localhost`.
 #[must_use]
 pub fn cookie_domain() -> Option<String> {
-    static CELL: OnceLock<Option<String>> = OnceLock::new();
-    cached_opt(&CELL, || env_opt("CART_COOKIE_DOMAIN"))
+    SERVICE.opt_str("COOKIE_DOMAIN")
 }
 
 /// OIDC issuer URL for the identity provider (Keycloak realm URL).
 #[must_use]
 pub fn identity_issuer_url() -> Option<String> {
-    static CELL: OnceLock<Option<String>> = OnceLock::new();
-    cached_opt(&CELL, || env_opt("CART_IDENTITY_ISSUER_URL"))
+    SERVICE.opt_str("IDENTITY_ISSUER_URL")
 }
 
 /// Service-account client id for Keycloak Admin API access.
 #[must_use]
 pub fn identity_client_id() -> Option<String> {
-    static CELL: OnceLock<Option<String>> = OnceLock::new();
-    cached_opt(&CELL, || env_opt("CART_IDENTITY_CLIENT_ID"))
+    SERVICE.opt_str("IDENTITY_CLIENT_ID")
 }
 
 /// Service-account client secret for Keycloak Admin API access.
 #[must_use]
 pub fn identity_client_secret() -> Option<String> {
-    static CELL: OnceLock<Option<String>> = OnceLock::new();
-    cached_opt(&CELL, || env_opt("CART_IDENTITY_CLIENT_SECRET"))
+    SERVICE.opt_str("IDENTITY_CLIENT_SECRET")
 }
 
 /// Whether identity user lookup is configured.

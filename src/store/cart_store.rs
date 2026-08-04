@@ -16,18 +16,18 @@ pub struct CartStore {
 
 impl CartStore {
     pub async fn connect() -> Result<Self, StoreError> {
-        let pool = sigma_pg::connect_as("cart").await?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool: sigma_pg::PgStore::connect("cart").await?.into_inner(),
+        })
     }
 
     #[cfg(test)]
     pub async fn connect_empty() -> Result<Self, StoreError> {
-        let store = Self::connect().await?;
-        sigma_pg::assert_disposable_test_db(&store.pool).await;
-        sqlx::query("TRUNCATE cart.cart_lines, cart.carts")
-            .execute(&store.pool)
-            .await?;
-        Ok(store)
+        Ok(Self {
+            pool: sigma_pg::PgStore::connect_empty("cart", "TRUNCATE cart.cart_lines, cart.carts")
+                .await?
+                .into_inner(),
+        })
     }
 
     #[must_use]

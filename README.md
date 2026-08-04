@@ -6,11 +6,6 @@
 
 Public shopping cart service for Sigma Tactical Group. It owns the customer-facing cart UI that storefronts (e.g. [sigma-store](https://github.com/sigmatactical-org/store)) add items to, plus an internal admin UI and JSON API. Carts are stored locally; catalog SKUs come from [sigma-catalog](https://github.com/sigmatactical-org/catalog), prices from the store, and users from identity.
 
-## Public vs internal
-
-- **Public** (`cart.sigmatactical.store`): `GET /` (the shopper's cart), `POST /add`, the line quantity/remove actions, and `POST /reserve` (pay the 50% deposit to reserve). No admin data is rendered on these pages.
-- **Internal / admin only**: `GET /admin` and the `/admin/carts/*` CRUD pages, plus the JSON API. These are not linked from the public pages and are intended to be reached only through the [sigma-identity](https://github.com/sigmatactical-org/identity) authenticated proxy in production.
-
 Repository: https://github.com/sigmatactical-org/cart
 
 Shared site chrome comes from [sigma-theme](https://github.com/sigmatactical-org/sigma-theme).
@@ -57,7 +52,14 @@ Each cart has:
 
 Reserving a cart creates an **order** in sigma-order (customer, line items with unit/line prices, and the 50% deposit) and flips the cart to `submitted`.
 
-## Public routes
+## API
+
+### Public vs internal
+
+- **Public** (`cart.sigmatactical.store`): `GET /` (the shopper's cart), `POST /add`, the line quantity/remove actions, and `POST /reserve` (pay the 50% deposit to reserve). No admin data is rendered on these pages.
+- **Internal / admin only**: `GET /admin` and the `/admin/carts/*` CRUD pages, plus the JSON API. These are not linked from the public pages and are intended to be reached only through the [sigma-identity](https://github.com/sigmatactical-org/identity) authenticated proxy in production.
+
+### Public routes
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -68,7 +70,7 @@ Reserving a cart creates an **order** in sigma-order (customer, line items with 
 | `POST` | `/lines/{line_id}/remove` | Remove the line |
 | `POST` | `/reserve` | Reserve by paying the 50% deposit (requires identity sign-in) |
 
-## Admin + JSON API
+### Admin + JSON API
 
 The admin web UI is mounted under `/admin`. The JSON API (reached through sigma-identity) is unchanged:
 

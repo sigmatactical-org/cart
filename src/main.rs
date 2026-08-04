@@ -10,6 +10,7 @@ fn main() -> Result<(), BoxError> {
         .enable_all()
         .build()?
         .block_on(async move {
+            sigma_cart::config::validate_with(&[sigma_config::DATABASE_URL_VAR])?;
             let store = sigma_cart::store::CartStore::connect().await?;
             sigma_theme::warp::serve("Sigma Cart", addr, sigma_cart::routes(store)).await?;
             Ok::<(), BoxError>(())

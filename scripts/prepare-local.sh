@@ -30,3 +30,7 @@ fi
 # shellcheck source=/dev/null
 source "$helper"
 link_local_crates "$ROOT"
+
+# Local binary runs need development defaults unless the full ConfigMap env is
+# already exported. Add this to your shell (or .env) when developing locally:
+#   export SIGMA_DEV_DEFAULTS=1

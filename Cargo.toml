@@ -21,7 +21,8 @@ anyhow = "1.0.103"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1.0.228", features = ["derive"] }
-sigma-theme = { git = "https://github.com/sigmatactical-org/sigma-theme.git", rev = "1b31e85724e4de48ec5c57ecd19bebf34d87962d", features = ["warp", "cache"] }
+sigma-config = { git = "https://github.com/sigmatactical-org/config.git", rev = "551ccb7957c34a440e5c5e95a78b738c1c62a932" }
+sigma-theme = { git = "https://github.com/sigmatactical-org/sigma-theme.git", rev = "1b31e85724e4de48ec5c57ecd19bebf34d87962d", default-features = false, features = ["askama", "warp", "cache"] }
 sigma-identity-nav = { git = "https://github.com/sigmatactical-org/identity.git", rev = "96ec046cefde7c0bb7ed4c8c991d7eedba7f7d7d", package = "sigma-identity-nav" }
 sigma-pg = { git = "https://github.com/sigmatactical-org/sigma-pg.git", rev = "f34cf0eed7bb450df47bedd7dfa5bb10e5f99e47" }
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }

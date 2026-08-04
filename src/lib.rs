@@ -54,10 +54,7 @@ mod tests {
     use warp::http::StatusCode;
 
     async fn test_store() -> store::CartStore {
-        sigma_pg::clients::internal::ensure_test_internal_token();
-        store::CartStore::connect_empty()
-            .await
-            .expect("PostgreSQL required for tests")
+        sigma_pg::test_helpers::ready_store(store::CartStore::connect_empty()).await
     }
 
     #[tokio::test]

@@ -1818,7 +1818,7 @@ dependencies = [
 [[package]]
 name = "sigma-pg"
 version = "0.1.0"
-source = "git+https://github.com/sigmatactical-org/sigma-pg.git?rev=2b20d1d5d5daab1771fce238946037fdde43c907#2b20d1d5d5daab1771fce238946037fdde43c907"
+source = "git+https://github.com/sigmatactical-org/sigma-pg.git?rev=532a31e1d0f9084b8eb8dc51083a5e6899df1b40#532a31e1d0f9084b8eb8dc51083a5e6899df1b40"
 dependencies = [
  "anyhow",
  "chrono",
